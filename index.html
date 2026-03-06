@@ -1,0 +1,39 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI数学老师 - 智能出题系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <!-- 只加载核心 JS，不再依赖敏感的 auto-render -->
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+        body {
+            font-family: 'Noto+Sans+SC', sans-serif;
+            background-color: #f8fafc;
+        }
+        .math-font {
+            font-family: 'KaTeX_Main', 'Times New Roman', serif;
+        }
+        /* 针对手动渲染生成的公式进行样式微调 */
+        .katex-display {
+            margin: 1.2em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            display: block;
+            text-align: center;
+        }
+        .katex {
+            font-size: 1.1em;
+            line-height: 1.2;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Railway 部署配置（唯一来源）
+# 注意：Railway 服务的 Root Directory 必须设置为 backend
+[build]
+builder = "dockerfile"
+
+# ===== 环境变量（非敏感）=====
+# 敏感变量（JWT_SECRET, DATABASE_URL, API Keys）请在 Railway Dashboard Variables 中设置
+[variables]
+CORS_ORIGINS = "https://the-ai-math-teacher.vercel.app,http://localhost:5173,http://localhost:3000"
+
+[deploy]
+startCommand = "node dist/index.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
