@@ -31,10 +31,7 @@ import { GeneratingCard } from '@/components/common/GeneratingCard';
 import { SuitDecorations } from '@/components/common/SuitDecorations';
 import { BackupManager } from '@/components/features/storage/BackupManager';
 import { HoverHelpOverlay } from '@/components/features/dev/HoverHelpOverlay';
-import { AuthDialog } from '@/components/features/auth/AuthDialog';
-import { AdminPanel } from '@/components/features/auth/AdminPanel';
 import { AppHeader, AppView } from '@/components/layout/AppHeader';
-import { useAuth } from '@/hooks/useAuth';
 import { useProviderConfig } from '@/hooks/useProviderConfig';
 import { useGenerateProblems, CUSTOM_CHAPTER_KEY } from '@/hooks/useGenerateProblems';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
@@ -113,7 +110,7 @@ const App: React.FC = () => {
   const [parallelMode, setParallelMode] = useState(true);
 
   // 浮层开关：同时只能激活一个面板，null 表示所有面板关闭
-  type ModalType = 'settings' | 'backup' | 'chat' | 'auth-login' | 'auth-register' | 'admin' | 'dataMenu' | null;
+  type ModalType = 'settings' | 'backup' | 'chat' | 'dataMenu' | null;
   const [activeModal, setActiveModal] = useState<ModalType>(null);
 
   /**
@@ -138,11 +135,6 @@ const App: React.FC = () => {
     config, customChapter, selectedKnowledgePoint, selectedRefs, aiServiceRef, parallelMode,
     resetKey,
   });
-
-  const {
-    user, isLoggedIn, loading: authLoading, error: authError,
-    login, register, logout, clearError: clearAuthError,
-  } = useAuth();
 
   //  副作用 
 
@@ -199,11 +191,6 @@ const App: React.FC = () => {
   }, [activeModal]);
 
   //  事件处理 
-  // 打开认证对话框，mode 决定显示登录还是注册表单
-  const openAuthDialog = (mode: 'login' | 'register' = 'login') => {
-    setActiveModal(mode === 'register' ? 'auth-register' : 'auth-login');
-  };
-
   /** 从本地文件导入数据（文件选择框回调） */
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -235,11 +222,6 @@ const App: React.FC = () => {
         view={view}
         onViewChange={setView}
         providerConfig={providerConfig}
-        isLoggedIn={isLoggedIn}
-        user={user}
-        onLogin={() => openAuthDialog('login')}
-        onLogout={logout}
-        onOpenAdminPanel={() => setActiveModal('admin')}
         onOpenSettings={() => setActiveModal('settings')}
         onOpenChat={() => setActiveModal('chat')}
         showDataMenu={activeModal === 'dataMenu'}
@@ -378,7 +360,7 @@ const App: React.FC = () => {
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">AI 模型</label>
                     <select value={quickModelValue} onChange={e => handleQuickModelChange(e.target.value, () => setActiveModal('settings'))} className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-[1.25rem] px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-500 focus:bg-white transition-all duration-300 appearance-none cursor-pointer hover:border-slate-200">
                       {backendProviders.length > 0 && (
-                        <optgroup label=" 后台配置（无需 API Key）">
+                        <optgroup label=" 本地网关配置（可选）">
                           {backendProviders.flatMap(p => p.models.map(m => (
                             <option key={`${p.id}:${m}`} value={`${p.id}:${m}`}>{p.name}  {m}</option>
                           )))}
@@ -386,16 +368,13 @@ const App: React.FC = () => {
                       )}
                       <optgroup label=" 自定义 API Key ">
                         <option value="__custom__">
-                          {providerConfig.backendProvider ? '切换为自定义 Key  打开设置' : `当前：${providerConfig.name}  ${providerConfig.model}`}
+                          {providerConfig.backendProvider ? '切换为本地直连 Key  打开设置' : `当前：${providerConfig.name}  ${providerConfig.model}`}
                         </option>
                       </optgroup>
                     </select>
                     <p className="text-[10px] text-slate-400 ml-2">
-                      {providerConfig.backendProvider ? ' 使用后台代理  无需配置 Key' : providerConfig.apiKey ? ` 使用自定义 Key  ${providerConfig.name}` : ' 未配置 API Key，请先选择模型或打开设置'}
+                      {providerConfig.backendProvider ? ' 使用本地网关转发  可不填写 API Key' : providerConfig.apiKey ? ` 使用本地直连 Key  ${providerConfig.name}` : ' 未配置 API Key，请先选择模型或打开设置'}
                     </p>
-                    {isLoggedIn && user && providerConfig.backendProvider && (
-                      <p className="text-[10px] text-slate-400 ml-2">今日配额：{user.usedToday ?? 0} / {user.dailyLimit ?? 500} 次</p>
-                    )}
                   </div>
 
                   <button onClick={handleGenerate} disabled={loading} data-help="开始生成题目。生成期间请勿重复点击。" className={`w-full h-16 rounded-[1.5rem] font-black text-base flex items-center justify-center gap-3 transition-all btn-ripple ${loading ? 'bg-slate-100 text-slate-400 animate-borderGlow' : 'bg-sky-600 text-white hover:bg-sky-700 shadow-2xl shadow-sky-100 hover:-translate-y-1 hover:shadow-sky-200/60 active:translate-y-0 active:scale-95'}`}>
@@ -496,9 +475,7 @@ const App: React.FC = () => {
       </footer>
 
       {/* ===== 浮层面板 ===== */}
-      <SettingsPanel isOpen={activeModal === 'settings'} onClose={() => setActiveModal(null)} onOpenAuth={() => openAuthDialog('login')} isLoggedIn={isLoggedIn} onSave={handleProviderSave} currentConfig={providerConfig} currentDualConfig={dualModelConfig} currentChatConfig={chatConfig} currentVisionConfig={visionConfig} />
-      <AuthDialog isOpen={activeModal === 'auth-login' || activeModal === 'auth-register'} mode={activeModal === 'auth-register' ? 'register' : 'login'} loading={authLoading} error={authError} onClose={() => setActiveModal(null)} onModeChange={(mode) => setActiveModal(mode === 'register' ? 'auth-register' : 'auth-login')} onLogin={login} onRegister={register} onClearError={clearAuthError} />
-      <AdminPanel isOpen={activeModal === 'admin'} onClose={() => setActiveModal(null)} />
+      <SettingsPanel isOpen={activeModal === 'settings'} onClose={() => setActiveModal(null)} onSave={handleProviderSave} currentConfig={providerConfig} currentDualConfig={dualModelConfig} currentChatConfig={chatConfig} currentVisionConfig={visionConfig} />
       <ChatPanel isOpen={activeModal === 'chat'} onClose={() => setActiveModal(null)} currentProblems={problems} chatProvider={chatConfig.provider} visionProvider={visionConfig.provider} onOpenSettings={() => setActiveModal('settings')} />
       <BackupManager isOpen={activeModal === 'backup'} onClose={() => setActiveModal(null)} onRestore={(filename) => restoreByFilename(filename, () => setActiveModal(null))} />
       <HoverHelpOverlay disabled={problems.length >= config.count && config.count > 0} />

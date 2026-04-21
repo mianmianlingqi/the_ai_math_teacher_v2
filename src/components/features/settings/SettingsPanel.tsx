@@ -3,7 +3,6 @@ import { AIProviderConfig, DualModelConfig, ChatConfig, VisionConfig } from '@/t
 import { PROVIDER_PRESETS, DEFAULT_PROVIDER_CONFIG, VISION_PROVIDER_PRESETS, DEFAULT_VISION_CONFIG } from '@/constants';
 import { storageService } from '@/services/storage';
 import { SuitDecorations } from '@/components/common/SuitDecorations';
-import { aiApi, authApi, isBackendEnabled, tokenStore, BackendUser } from '@/services/api/backendApi';
 
 const sanitizeUiError = (raw: string): string => {
   const text = String(raw || '')
@@ -17,8 +16,6 @@ const sanitizeUiError = (raw: string): string => {
 interface SettingsPanelProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenAuth: () => void;
-  isLoggedIn: boolean;
   onSave: (config: AIProviderConfig, dualConfig: DualModelConfig, chatConfig: ChatConfig, visionConfig: VisionConfig) => void;
   currentConfig: AIProviderConfig;
   currentDualConfig: DualModelConfig;
@@ -26,7 +23,7 @@ interface SettingsPanelProps {
   currentVisionConfig: VisionConfig;
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, onOpenAuth, isLoggedIn, onSave, currentConfig, currentDualConfig, currentChatConfig, currentVisionConfig }) => {
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, onSave, currentConfig, currentDualConfig, currentChatConfig, currentVisionConfig }) => {
   const [activeTab, setActiveTab] = useState<'main' | 'small' | 'chat' | 'vision'>('main');
 
   const [config, setConfig] = useState<AIProviderConfig>(currentConfig);
@@ -41,30 +38,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
 
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
-
-  // ===== 注销账号流程状态 =====
-  const [showDeactivate, setShowDeactivate] = useState(false);
-  const [deactivatePassword, setDeactivatePassword] = useState('');
-  const [deactivateLoading, setDeactivateLoading] = useState(false);
-  const [deactivateError, setDeactivateError] = useState('');
-
-  const handleDeactivate = async () => {
-    if (!deactivatePassword) {
-      setDeactivateError('请输入密码以确认注销');
-      return;
-    }
-    setDeactivateLoading(true);
-    setDeactivateError('');
-    try {
-      await authApi.deactivate(deactivatePassword);
-      // auth:logout 事件已在 deactivate() 内广播，UI 会自动同步
-      onClose();
-    } catch (err: any) {
-      setDeactivateError(err.message || '注销失败，请稍后重试');
-    } finally {
-      setDeactivateLoading(false);
-    }
-  };
 
   useEffect(() => {
     setConfig(currentConfig);
@@ -246,8 +219,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
               onChange={(newConf) => setChatConfig({ provider: newConf })}
               customModel={customModelChat}
               setCustomModel={setCustomModelChat}
-              isLoggedIn={isLoggedIn}
-              onOpenAuth={onOpenAuth}
               testStatus={testStatus}
               setTestStatus={setTestStatus}
               testMessage={testMessage}
@@ -259,8 +230,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
               onChange={(newConf) => setVisionConfig({ provider: newConf })}
               customModel={customModelVision}
               setCustomModel={setCustomModelVision}
-              isLoggedIn={isLoggedIn}
-              onOpenAuth={onOpenAuth}
               testStatus={testStatus}
               setTestStatus={setTestStatus}
               testMessage={testMessage}
@@ -273,8 +242,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
               onChange={(newConf) => activeTab === 'main' ? setConfig(newConf) : setDualConfig(prev => ({ ...prev, provider: newConf }))}
               customModel={activeTab === 'main' ? customModelMain : customModelSmall}
               setCustomModel={(val) => activeTab === 'main' ? setCustomModelMain(val) : setCustomModelSmall(val)}
-              isLoggedIn={isLoggedIn}
-              onOpenAuth={onOpenAuth}
               testStatus={testStatus}
               setTestStatus={setTestStatus}
               testMessage={testMessage}
@@ -321,52 +288,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
             )}
           </div>
 
-          {/* ===== 注销账号区（仅登录用户可见）===== */}
-          {isLoggedIn && (
-            <div className="mt-8 pt-6 border-t border-rose-100">
-              {!showDeactivate ? (
-                <button
-                  onClick={() => { setShowDeactivate(true); setDeactivateError(''); setDeactivatePassword(''); }}
-                  className="text-xs font-bold text-rose-400 hover:text-rose-600 underline underline-offset-2 transition-colors"
-                >
-                  注销账号
-                </button>
-              ) : (
-                <div className="space-y-4 rounded-2xl border-2 border-rose-200 bg-rose-50/50 p-5">
-                  <div>
-                    <p className="text-sm font-black text-rose-700">⚠️ 确认注销账号</p>
-                    <p className="text-xs text-rose-500 font-medium mt-1">注销后账号将被停用，所有登录设备下线。此操作不可自行撤销。</p>
-                  </div>
-                  <input
-                    type="password"
-                    placeholder="输入当前密码以确认"
-                    value={deactivatePassword}
-                    onChange={e => { setDeactivatePassword(e.target.value); setDeactivateError(''); }}
-                    className="w-full bg-white border-2 border-rose-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-rose-400 transition-all"
-                    onKeyDown={e => e.key === 'Enter' && handleDeactivate()}
-                  />
-                  {deactivateError && (
-                    <p className="text-xs font-semibold text-rose-600">{deactivateError}</p>
-                  )}
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => { setShowDeactivate(false); setDeactivatePassword(''); setDeactivateError(''); }}
-                      className="flex-1 py-2.5 rounded-xl text-xs font-black text-slate-500 bg-white border-2 border-slate-200 hover:bg-slate-50 transition-all"
-                    >
-                      取消
-                    </button>
-                    <button
-                      onClick={handleDeactivate}
-                      disabled={deactivateLoading}
-                      className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-rose-500 hover:bg-rose-600 disabled:opacity-50 transition-all"
-                    >
-                      {deactivateLoading ? '注销中...' : '确认注销'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -378,8 +299,6 @@ interface ProviderFormProps {
   onChange: (config: AIProviderConfig) => void;
   customModel: string;
   setCustomModel: (model: string) => void;
-  isLoggedIn: boolean;
-  onOpenAuth: () => void;
   testStatus: 'idle' | 'testing' | 'success' | 'error';
   setTestStatus: (status: 'idle' | 'testing' | 'success' | 'error') => void;
   testMessage: string;
@@ -387,91 +306,9 @@ interface ProviderFormProps {
   providerPresets?: typeof PROVIDER_PRESETS;
 }
 
-const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customModel, setCustomModel, isLoggedIn, onOpenAuth, testStatus, setTestStatus, testMessage, setTestMessage, providerPresets }) => {
+const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customModel, setCustomModel, testStatus, setTestStatus, testMessage, setTestMessage, providerPresets }) => {
   const [showApiKey, setShowApiKey] = useState(false);
   const presets = providerPresets || PROVIDER_PRESETS;
-
-  // ===== 后台模型相关状态 =====
-  const backendEnabled = isBackendEnabled();
-  const isBackendMode = !!config.backendProvider;
-  const [backendProviders, setBackendProviders] = useState<Array<{ id: string; name: string; models: string[] }>>([]);
-  const [backendLoading, setBackendLoading] = useState(false);
-  const [showBackendSection, setShowBackendSection] = useState(isBackendMode);
-  const [backendUser, setBackendUser] = useState<BackendUser | null>(null);
-  const [quotaLoading, setQuotaLoading] = useState(false);
-  const [quotaError, setQuotaError] = useState('');
-
-  useEffect(() => {
-    setShowBackendSection(!!config.backendProvider);
-  }, [config.backendProvider]);
-
-  const loadBackendUserQuota = async () => {
-    if (!isLoggedIn) {
-      setBackendUser(null);
-      setQuotaError('');
-      return;
-    }
-
-    setQuotaLoading(true);
-    setQuotaError('');
-    try {
-      const me = await authApi.getMe();
-      if (!me) {
-        throw new Error('步骤[获取当前用户信息]失败，返回值为 null。Hint: 请重新登录后重试。');
-      }
-      setBackendUser(me);
-    } catch (error: any) {
-      setBackendUser(null);
-      const message = (error?.message || '').trim() || '未知错误';
-      setQuotaError(`步骤[加载用户配额]失败，登录状态[${isLoggedIn ? '已登录' : '未登录'}]，原因[${message}]。Hint: 请检查登录状态并重试。`);
-    } finally {
-      setQuotaLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!backendEnabled) return;
-    if (!isLoggedIn) {
-      setBackendUser(null);
-      setQuotaError('');
-      return;
-    }
-    loadBackendUserQuota();
-  }, [backendEnabled, isLoggedIn]);
-
-  const loadBackendProviders = async () => {
-    if (backendProviders.length > 0) return;
-    setBackendLoading(true);
-    const list = await aiApi.getProviders().catch(() => []);
-    setBackendProviders(list);
-    setBackendLoading(false);
-  };
-
-  const handleSelectBackendProvider = (providerId: string, providerName: string, defaultModel: string) => {
-    onChange({
-      ...config,
-      id: `backend-${providerId}`,
-      name: `[后台] ${providerName}`,
-      model: defaultModel,
-      baseURL: '',
-      apiKey: '',
-      backendProvider: providerId,
-    });
-    setCustomModel('');
-  };
-
-  const handleExitBackendMode = () => {
-    onChange({
-      ...config,
-      id: 'custom',
-      name: '自定义',
-      model: '',
-      baseURL: '',
-      apiKey: '',
-      backendProvider: undefined,
-    });
-    setCustomModel('');
-  };
 
   const handlePresetChange = (presetId: string) => {
     const preset = presets.find(p => p.id === presetId);

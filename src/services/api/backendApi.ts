@@ -3,7 +3,9 @@
  * 统一管理 Token 存储、自动刷新和请求封装
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+// 本地模式默认关闭远程后端，只有显式设置 VITE_ENABLE_REMOTE_BACKEND=true 才启用。
+const REMOTE_BACKEND_ENABLED = import.meta.env.VITE_ENABLE_REMOTE_BACKEND === 'true';
+const BACKEND_URL = REMOTE_BACKEND_ENABLED ? (import.meta.env.VITE_BACKEND_URL || '') : '';
 const ACCESS_TOKEN_KEY = 'ai_math_access_token';
 const REFRESH_TOKEN_KEY = 'ai_math_refresh_token';
 const USER_KEY = 'ai_math_user';
@@ -77,10 +79,10 @@ async function withRefresh(failedRequest: () => Promise<Response>): Promise<Resp
       // 刷新失败：通知所有等待的请求一起失败，避免永久挂起
       const pending = refreshCallbacks;
       refreshCallbacks = [];
-      pending.forEach(cb => cb.reject(new Error('会话已过期，请重新登录')));
+      pending.forEach(cb => cb.reject(new Error('网关认证状态已失效，请检查本地模式设置或远程网关配置。')));
       tokenStore.clear();
       window.dispatchEvent(new CustomEvent('auth:logout'));
-      throw new Error('会话已过期，请重新登录');
+      throw new Error('网关认证状态已失效，请检查本地模式设置或远程网关配置。');
     } finally {
       isRefreshing = false;
     }
@@ -214,7 +216,7 @@ export const syncApi = {
 };
 
 /** 判断当前是否启用了后端（环境变量已配置）*/
-export const isBackendEnabled = () => !!BACKEND_URL;
+export const isBackendEnabled = () => REMOTE_BACKEND_ENABLED && !!BACKEND_URL;
 
 /**
  * 唤醒 Railway 后端（免费计划在空闲 5 分钟后进入休眠状态）。
@@ -319,7 +321,7 @@ export const BACKEND_BASE_URL = BACKEND_URL;
 
 // ===== AI 代理 API =====
 
-/** 后台各供应商对应的推荐模型列表 */
+/** 本地网关各供应商对应的推荐模型列表 */
 const BACKEND_PROVIDER_MODELS: Record<string, { label: string; models: string[] }> = {
   aliyun:   { label: '通义千问', models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long', 'qwen3-235b-a22b', 'qwen3-30b-a3b'] },
   deepseek: { label: 'DeepSeek',  models: ['deepseek-chat', 'deepseek-reasoner'] },
@@ -328,7 +330,7 @@ const BACKEND_PROVIDER_MODELS: Record<string, { label: string; models: string[] 
 };
 
 export const aiApi = {
-  /** 获取后台已配置 Key 的供应商列表 */
+  /** 获取本地网关已配置 Key 的供应商列表 */
   async getProviders(): Promise<Array<{ id: string; name: string; models: string[] }>> {
     const res = await apiFetch('/api/ai/providers').catch(() => null);
     if (!res?.data) return [];
@@ -339,7 +341,7 @@ export const aiApi = {
     }));
   },
 
-  /** 通过后台代理发起非流式 AI 请求（返回 OpenAI 格式的 data） */
+  /** 通过本地网关发起非流式 AI 请求（返回 OpenAI 格式的 data） */
   async chat(providerId: string, model: string, messages: any[], options?: { temperature?: number; max_tokens?: number }): Promise<any> {
     const res = await apiFetch('/api/ai/chat', {
       method: 'POST',

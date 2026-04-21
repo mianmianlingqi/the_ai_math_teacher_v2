@@ -90,7 +90,7 @@ export interface AIProviderConfig {
   maxTokens?: number;       // 最大输出 token 数
   temperature?: number;     // 温度参数
   timeout?: number;         // 超时时间（秒）
-  backendProvider?: string; // 若设置，表示通过后台代理此供应商（不直接暴露 Key）
+  backendProvider?: string; // 若设置，表示通过本地网关转发此供应商（不直接暴露 Key）
 }
 
 export interface DualModelConfig {

@@ -80,7 +80,7 @@ export function useAuth(): UseAuthResult {
       return me;
     } catch (err: any) {
       const reason = String(err?.message || '未知错误');
-      setError(buildAuthError('刷新登录态', `Token状态[存在]`, reason, '请重新登录后重试。'));
+      setError(buildAuthError('刷新认证态', `Token状态[存在]`, reason, '当前为本地模式；如启用了远程认证，请重新认证后重试。'));
       setUser(null);
       return null;
     }
@@ -107,7 +107,7 @@ export function useAuth(): UseAuthResult {
       return true;
     } catch (err: any) {
       const reason = String(err?.message || '未知错误');
-      setError(buildAuthError('登录提交', `邮箱[${input.email}]`, reason, '请检查邮箱密码是否正确，或先完成注册。'));
+      setError(buildAuthError('远程认证提交', `邮箱[${input.email}]`, reason, '若使用本地模式可忽略此提示；如启用远程认证请检查账号信息。'));
       return false;
     } finally {
       setLoading(false);
@@ -135,7 +135,7 @@ export function useAuth(): UseAuthResult {
       return true;
     } catch (err: any) {
       const reason = String(err?.message || '未知错误');
-      setError(buildAuthError('注册提交', `邮箱[${input.email}]，昵称[${input.nickname || '未填写'}]`, reason, '请确认邮箱未被占用且密码长度满足要求。'));
+      setError(buildAuthError('远程注册提交', `邮箱[${input.email}]，昵称[${input.nickname || '未填写'}]`, reason, '本地模式不依赖注册；如启用远程认证请检查邮箱与密码规则。'));
       return false;
     } finally {
       setLoading(false);
@@ -174,7 +174,7 @@ export function useAuth(): UseAuthResult {
      */
     const handleLogout = (): void => {
       setUser(null);
-      setError('会话已过期，请重新登录。');
+      setError('远程认证状态已失效。当前为本地模式时可直接使用本地直连或本地网关。');
     };
 
     window.addEventListener('auth:logout', handleLogout as EventListener);

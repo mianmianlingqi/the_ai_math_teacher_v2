@@ -328,7 +328,7 @@ export class UnifiedAIService {
     onLog: (log: LogEntry) => void,
     isJsonMode: boolean
   ): Promise<{ content: string; elapsedSec: string }> {
-    // ===== 后台代理模式 =====
+    // ===== 本地网关转发模式 =====
     if (provider.backendProvider) {
       const startTime = Date.now();
       try {
@@ -345,16 +345,16 @@ export class UnifiedAIService {
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
         return { content, elapsedSec };
       } catch (err: any) {
-        // "Failed to fetch" = 网络层失败（CORS 被拦截、后端睡眠或地址不通）
-        // "401" / "403"      = 鉴权失败（未登录或配额不足）
+        // "Failed to fetch" = 网络层失败（CORS 被拦截、服务未启动或地址不通）
+        // "401" / "403"      = 网关鉴权失败（远程网关模式）
         const isFetchError = err.message === 'Failed to fetch' || err.message?.includes('NetworkError');
         onLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'error',
-          message: `后台代理请求失败：${err.message}`,
+          message: `本地网关请求失败：${err.message}`,
           suggestion: isFetchError
-            ? '⚠️ 网络层失败（Failed to fetch）。可能原因：① Railway 后端正在睡眠，稍等几秒后重试；② 后端 CORS_ORIGINS 未包含当前域名；③ VITE_BACKEND_URL 配置有误。'
-            : '请确认已登录，且后台已配置该供应商的 API Key。',
+            ? '⚠️ 网关请求失败（Failed to fetch）。可能原因：① 本地网关未启动或地址不可达；② CORS_ORIGINS 未包含当前域名；③ VITE_BACKEND_URL 或 VITE_ENABLE_REMOTE_BACKEND 配置有误。'
+            : '请检查网关供应商配置，或切换为本地直连 API Key 模式。',
           category: 'network',
           details: '',
         });
@@ -508,7 +508,7 @@ export class UnifiedAIService {
     callbacks: ExplanationStreamCallbacks,
     onLog: (log: LogEntry) => void
   ): Promise<{ content: string; elapsedSec: string }> {
-    // 后台代理模式暂不支持流式，回退到非流式 + 模拟一次性推送
+    // 网关转发模式暂不支持流式，回退到非流式 + 模拟一次性推送
     if (provider.backendProvider) {
       const result = await this.fetchModelCompletion(provider, messages, onLog, true);
       callbacks.onToken(result.content);
@@ -822,7 +822,7 @@ export class UnifiedAIService {
       expText = result.content;
       elapsed2 = result.elapsedSec;
     } else {
-      // ===== 非流式路径（后台代理 or 无回调）=====
+      // ===== 非流式路径（网关转发或无回调）=====
       const result = await this.fetchModelCompletion(this.providerConfig, explanationMessages, onLog, false);
       expText = result.content;
       elapsed2 = result.elapsedSec;

@@ -9,7 +9,6 @@
 
 import React from 'react';
 import { AIProviderConfig } from '@/types';
-import { BackendUser } from '@/services/api/backendApi';
 
 // ===== 类型定义 =====
 
@@ -22,13 +21,6 @@ export interface AppHeaderProps {
 
   // 供应商（用于工具提示）
   providerConfig: AIProviderConfig;
-
-  // 认证
-  isLoggedIn: boolean;
-  user: BackendUser | null;
-  onLogin: () => void;
-  onLogout: () => void;
-  onOpenAdminPanel: () => void;
 
   // 功能开关
   onOpenSettings: () => void;
@@ -51,11 +43,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   view,
   onViewChange,
   providerConfig,
-  isLoggedIn,
-  user,
-  onLogin,
-  onLogout,
-  onOpenAdminPanel,
   onOpenSettings,
   onOpenChat,
   showDataMenu,
@@ -165,45 +152,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </svg>
             设置
           </button>
-
-          {/* 管理员按钮（仅 admin 可见） */}
-          {isLoggedIn && user?.role === 'admin' && (
-            <button
-              onClick={onOpenAdminPanel}
-              data-help="点击打开管理员控制台，可查看用户列表与执行清理操作。"
-              className="px-3 py-1.5 rounded-xl text-[10px] font-black bg-indigo-100 text-indigo-700 border border-indigo-200 hover:bg-indigo-200 hover:scale-105 active:scale-95 transition-all duration-200"
-              title={`管理员账号: ${user?.email || '未知邮箱'} · 点击打开控制台`}
-            >
-              管理员
-            </button>
-          )}
-
-          {/* 登录 / 退出 */}
-          {isLoggedIn ? (
-            <button
-              onClick={onLogout}
-              data-help="退出当前账号。退出后将无法使用后台已配置模型，直到重新登录。"
-              className="px-4 py-2.5 rounded-xl text-xs font-black transition-all duration-300 text-slate-500 hover:text-rose-600 hover:bg-white flex items-center gap-1.5 hover:scale-105 active:scale-95"
-              title={`当前账号: ${user?.nickname || user?.email || '已登录用户'}`}
-            >
-              <svg className="w-4 h-4 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
-              </svg>
-              退出
-            </button>
-          ) : (
-            <button
-              onClick={onLogin}
-              data-help="登录后可使用后台已配置模型并查看个人配额。"
-              className="px-4 py-2.5 rounded-xl text-xs font-black transition-all duration-300 text-slate-500 hover:text-emerald-600 hover:bg-white flex items-center gap-1.5 hover:scale-105 active:scale-95"
-              title="登录 / 注册"
-            >
-              <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A9 9 0 1118 20H6a1 1 0 01-.879-1.496z" />
-              </svg>
-              登录
-            </button>
-          )}
 
           {/* 数据管理下拉菜单 */}
           <div className="relative" ref={dataMenuRef}>

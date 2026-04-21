@@ -1,8 +1,4 @@
-import { Router, Response } from 'express';
-import { requireAuth } from '../middleware/auth';
-import { checkQuota, recordUsage } from '../middleware/quota';
-import { db } from '../db/client';
-import { AuthRequest } from '../types';
+import { Router, Request, Response } from 'express';
 // @ts-ignore
 import fetch from 'node-fetch';
 
@@ -41,7 +37,7 @@ function getProviders() {
 }
 
 // ===== GET /api/ai/providers（获取可用供应商列表，不暴露 Key）=====
-router.get('/providers', requireAuth, (_req: AuthRequest, res: Response) => {
+router.get('/providers', (_req: Request, res: Response) => {
   const providers = getProviders();
   const available = Object.entries(providers)
     .filter(([, p]) => p.apiKey)
@@ -50,7 +46,7 @@ router.get('/providers', requireAuth, (_req: AuthRequest, res: Response) => {
 });
 
 // ===== POST /api/ai/chat（普通非流式请求）=====
-router.post('/chat', requireAuth, checkQuota, async (req: AuthRequest, res: Response) => {
+router.post('/chat', async (req: Request, res: Response) => {
   const { provider: providerId = 'aliyun', model, messages, temperature, max_tokens, response_format } = req.body;
 
   if (!messages || !Array.isArray(messages)) {
@@ -85,21 +81,15 @@ router.post('/chat', requireAuth, checkQuota, async (req: AuthRequest, res: Resp
       return;
     }
 
-    // 记录用量
-    const usage = data.usage || {};
-    await recordUsage(req.user!.userId, usage.prompt_tokens || 0, usage.completion_tokens || 0);
-    await logRequest(req.user!.userId, providerId, model, usage, true);
-
     res.json({ success: true, data });
   } catch (err: any) {
     console.error('[AI] chat error:', err.message);
-    await logRequest(req.user!.userId, providerId, model, {}, false, err.message);
     res.status(500).json({ success: false, error: 'AI 请求失败，请稍后重试' });
   }
 });
 
 // ===== POST /api/ai/stream（流式 SSE 请求）=====
-router.post('/stream', requireAuth, checkQuota, async (req: AuthRequest, res: Response) => {
+router.post('/stream', async (req: Request, res: Response) => {
   const { provider: providerId = 'aliyun', model, messages, temperature, max_tokens } = req.body;
 
   if (!messages || !Array.isArray(messages)) {
@@ -138,22 +128,14 @@ router.post('/stream', requireAuth, checkQuota, async (req: AuthRequest, res: Re
     }
 
     // 透传 SSE 流
-    let completionTokens = 0;
     const body = upstream.body as any;
     body.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       res.write(text);
-      // 粗略统计 completion tokens
-      const matches = text.match(/"content":"([^"]*)"/g);
-      if (matches) {
-        completionTokens += matches.join('').length / 4;
-      }
     });
 
-    body.on('end', async () => {
+    body.on('end', () => {
       res.end();
-      await recordUsage(req.user!.userId, 0, Math.round(completionTokens));
-      await logRequest(req.user!.userId, providerId, model, { completion_tokens: Math.round(completionTokens) }, true);
     });
 
     body.on('error', (err: Error) => {
@@ -171,22 +153,5 @@ router.post('/stream', requireAuth, checkQuota, async (req: AuthRequest, res: Re
     res.end();
   }
 });
-
-async function logRequest(
-  userId: string,
-  provider: string,
-  model: string,
-  usage: Record<string, number>,
-  success: boolean,
-  errorMsg?: string
-) {
-  try {
-    await db.query(
-      `INSERT INTO ai_request_logs (user_id, provider, model, prompt_tokens, completion_tokens, success, error_msg)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [userId, provider, model, usage.prompt_tokens || 0, usage.completion_tokens || 0, success, errorMsg || null]
-    );
-  } catch {}
-}
 
 export default router;

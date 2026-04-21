@@ -150,15 +150,14 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
         : `正在逐题生成 ${totalCount} 道题目（每题基于前题去重）...`,
     });
 
-    // 若使用后台代理供应商，提前 Ping /health 唤醒可能休眠的 Railway 实例。
-    // Why: Railway 免费计划空闲5分钟后休眠，恢复需要10-30秒，立刻重试无效；
-    //      预热成功后再发 AI 请求，可显著降低首次失败率。
+    // 若使用本地网关供应商，提前 Ping /health 检查网关可用性。
+    // Why: 网关进程刚启动时可能尚未完成监听，先预热再请求可降低首次失败率。
     const activeConfig = aiServiceRef.current.getConfig();
     if (activeConfig.backendProvider && isBackendEnabled()) {
       addLog({
         timestamp: new Date().toLocaleTimeString(),
         level: 'info',
-        message: '正在检查后端服务状态...',
+        message: '正在检查本地网关服务状态...',
       });
       let wakeAttemptCount = 0;
       const isAwake = await wakeUpBackend(6, (attempt) => {
@@ -166,20 +165,20 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
         addLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'warn',
-          message: `后端服务正在从休眠中恢复，第 ${attempt} 次等待（最多 30 秒）...`,
+          message: `本地网关尚未就绪，第 ${attempt} 次等待（最多 30 秒）...`,
         });
       });
       if (!isAwake) {
         addLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'warn',
-          message: '后端连接超时，将继续尝试（如持续失败请检查 VITE_BACKEND_URL 或 Railway 服务状态）。',
+          message: '本地网关连接超时，将继续尝试（如持续失败请检查 VITE_BACKEND_URL、VITE_ENABLE_REMOTE_BACKEND 与网关进程状态）。',
         });
       } else if (wakeAttemptCount > 0) {
         addLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'info',
-          message: '后端服务已就绪，开始生成题目。',
+          message: '本地网关已就绪，开始生成题目。',
         });
       }
     }

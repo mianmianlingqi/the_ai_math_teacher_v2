@@ -133,14 +133,14 @@ export function useProviderConfig(): UseProviderConfigResult {
     return () => window.removeEventListener('data:imported', handleDataImported);
   }, []);
 
-  // 5. 挂载时拉取后台供应商列表，并自动切换到默认模型
+  // 5. 挂载时拉取本地网关供应商列表，并自动切换到默认模型
   useEffect(() => {
     if (!isBackendEnabled()) return;
 
     aiApi.getProviders().then(list => {
       setBackendProviders(list);
 
-      // 如果用户当前未配置任何供应商，自动选取第一个后台供应商
+      // 如果用户当前未配置任何供应商，自动选取第一个本地网关供应商
       if (list.length > 0 && !providerConfig.backendProvider && !providerConfig.apiKey) {
         const deepseek = list.find(p => p.id === 'deepseek');
         const target = deepseek ?? list[0];
@@ -159,7 +159,7 @@ export function useProviderConfig(): UseProviderConfigResult {
         storageService.saveProviderConfig(newConfig);
       }
     }).catch(() => {
-      // 后台不可用时静默失败，用户仍可使用自定义 Key
+      // 本地网关不可用时静默失败，用户仍可使用自定义 Key
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -182,7 +182,7 @@ export function useProviderConfig(): UseProviderConfigResult {
       name: provider?.name ?? providerId,
       backendProvider: providerId,
       model,
-      apiKey: '', // 后台代理模式无需暴露 Key
+      apiKey: '', // 本地网关模式无需暴露 Key
     };
     setProviderConfig(newConfig);
     storageService.saveProviderConfig(newConfig);

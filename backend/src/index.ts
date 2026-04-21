@@ -4,11 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
-import { runMigrations } from './db/client';
-import authRoutes from './routes/auth';
 import aiRoutes from './routes/ai';
-import syncRoutes from './routes/sync';
-import adminRoutes from './routes/admin';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '4000');
@@ -50,13 +46,6 @@ const globalLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// 认证接口更严格的速率限制
-const authLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 小时
-  max: 20,
-  message: { success: false, error: '登录/注册尝试过于频繁，请 1 小时后再试' },
-});
-
 app.use(globalLimiter);
 
 // ===== 健康检查 =====
@@ -69,10 +58,7 @@ app.get('/health', (_req, res) => {
 });
 
 // ===== API 路由 =====
-app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/ai', aiRoutes);
-app.use('/api/sync', syncRoutes);
-app.use('/api/admin', adminRoutes);
 
 // ===== 404 处理 =====
 app.use((_req, res) => {
@@ -88,13 +74,13 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // ===== 启动 =====
 async function start() {
   try {
-    console.log('[DB] Running migrations...');
-    await runMigrations();
+    console.log('[Server] Running in local mode (AI routes only).');
 
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`\n🚀 AI Math Teacher Backend`);
       console.log(`   Port    : ${PORT}`);
       console.log(`   Env     : ${process.env.NODE_ENV || 'development'}`);
+      console.log(`   Mode    : local-ai`);
       console.log(`   Health  : http://localhost:${PORT}/health\n`);
     });
   } catch (err: any) {
