@@ -31,6 +31,7 @@ export interface MathProblem {
   options?: string[];
   answer: string;
   explanation: string;
+  isExplanationStreaming?: boolean; // 前端瞬时状态：解析是否仍在流式生成中
   difficulty: Difficulty;
   syllabus: Syllabus;
   questionType: QuestionType;

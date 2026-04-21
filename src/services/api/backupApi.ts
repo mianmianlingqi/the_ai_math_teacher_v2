@@ -16,11 +16,17 @@ import { showConfirm } from './confirmService';
 export interface BackupFile {
   name: string;
   time: number; // Unix 时间戳（毫秒）
+  size?: number;
+  isAuto?: boolean;
 }
 
 export interface ImportResult {
   success: boolean;
   message: string;
+}
+
+export interface AutoBackupOptions {
+  reason?: string;
 }
 
 // ===== 工具函数 =====
@@ -42,6 +48,27 @@ function downloadFile(content: string, fileName: string, mimeType: string): void
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+async function parseJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error((data as any)?.error || fallbackMessage);
+  }
+  return data as T;
+}
+
+function sortBackupFiles(files: BackupFile[]): BackupFile[] {
+  return [...files].sort((a, b) => {
+    if (Boolean(a.isAuto) !== Boolean(b.isAuto)) {
+      return a.isAuto ? 1 : -1;
+    }
+    return b.time - a.time;
+  });
+}
+
+function getPreferredLatestBackup(files: BackupFile[]): BackupFile | undefined {
+  return sortBackupFiles(files)[0];
 }
 
 // ===== 导出/导入 API =====
@@ -70,7 +97,8 @@ export async function exportData(onMenuClose: () => void): Promise<void> {
     if (response.ok) {
       const result = await response.json();
       if (result.success) {
-        toast.success(`备份成功！文件已自动保存到 backup/${result.filename}`);
+        const saveLocation = result.locationLabel ? `${result.locationLabel}/${result.filename}` : `backup/${result.filename}`;
+        toast.success(`备份成功！文件已自动保存到 ${saveLocation}`);
         onMenuClose();
         return;
       }
@@ -84,6 +112,36 @@ export async function exportData(onMenuClose: () => void): Promise<void> {
   const fileName = `AI数学老师_全部数据_${new Date().toISOString().slice(0, 10)}.json`;
   downloadFile(jsonStr, fileName, 'application/json;charset=utf-8');
   onMenuClose();
+}
+
+/**
+ * 自动将当前数据写入本地备份目录中的最新快照文件。
+ *
+ * Why: 用户数据主存仍在 localStorage，需要一个独立于版本更新的文件级兜底。
+ */
+export async function autoBackupData(options: AutoBackupOptions = {}): Promise<boolean> {
+  try {
+    const payload = JSON.parse(storageService.exportAllData()) as Record<string, unknown>;
+    payload._backupName = 'auto_latest';
+    payload._overwriteLatest = true;
+    payload._backupReason = options.reason || '自动备份';
+
+    const response = await fetch('/api/save-backup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+    return Boolean(result?.success);
+  } catch (error) {
+    console.warn('[backupService] 自动备份失败，将继续依赖 localStorage。', error);
+    return false;
+  }
 }
 
 /**
@@ -104,21 +162,18 @@ export async function importFromServer(
 ): Promise<void> {
   try {
     // 1. 获取备份列表
-    const listRes = await fetch('/api/list-backups');
-    if (!listRes.ok) {
-      throw new Error(
-        `步骤[获取备份列表]失败，HTTP状态[${listRes.status}]，原因[服务器返回错误]。Hint: 请确认本地 API 服务是否正在运行。`
-      );
-    }
-
-    const files: BackupFile[] = await listRes.json();
+    const files = await listBackups();
     if (!Array.isArray(files) || files.length === 0) {
       toast.error('未找到服务器端的备份文件。请先执行一次“导出全部数据”以生成备份。');
       return;
     }
 
     // 2. 确认使用最新文件（服务器端已排序）
-    const latestFile = files[0];
+    const latestFile = getPreferredLatestBackup(files);
+    if (!latestFile) {
+      toast.error('未找到可用备份文件。');
+      return;
+    }
     const confirmed = await showConfirm(
       `找到最新备份：${latestFile.name}\n时间：${new Date(latestFile.time).toLocaleString()}\n确定要恢复吗？`
     );
@@ -134,6 +189,35 @@ export async function importFromServer(
     onFallbackUpload();
   } finally {
     onMenuClose();
+  }
+}
+
+/**
+ * 获取可恢复的本地备份列表。
+ */
+export async function listBackups(): Promise<BackupFile[]> {
+  const listRes = await fetch('/api/list-backups');
+  if (!listRes.ok) {
+    throw new Error(
+      `步骤[获取备份列表]失败，HTTP状态[${listRes.status}]，原因[服务器返回错误]。Hint: 请确认本地 API 服务是否正在运行。`
+    );
+  }
+
+  const files = await parseJsonResponse<BackupFile[]>(listRes, '无法获取备份列表');
+  return sortBackupFiles(files);
+}
+
+/**
+ * 删除指定备份文件。
+ */
+export async function deleteBackup(filename: string): Promise<void> {
+  const response = await fetch(`/api/delete-backup?filename=${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  });
+
+  const result = await parseJsonResponse<{ success: boolean; error?: string }>(response, '删除备份失败');
+  if (!result.success) {
+    throw new Error(result.error || '删除备份失败');
   }
 }
 

@@ -1133,6 +1133,154 @@ export class UnifiedAIService {
     }));
   }
 
+  /**
+   * 在 JSON 字符串内部保护 LaTeX 反斜杠，避免 \frac / \right / \theta 等命令
+   * 被 JSON.parse 误当成 \f / \r / \t 等转义序列吞掉。
+   */
+  private protectLatexBackslashesInJson(text: string): { normalized: string; replacements: number } {
+    let normalized = '';
+    let inString = false;
+    let replacements = 0;
+
+    for (let index = 0; index < text.length; index += 1) {
+      const currentChar = text[index];
+
+      if (!inString) {
+        normalized += currentChar;
+        if (currentChar === '"') {
+          inString = true;
+        }
+        continue;
+      }
+
+      if (currentChar === '"') {
+        normalized += currentChar;
+        inString = false;
+        continue;
+      }
+
+      if (currentChar !== '\\') {
+        normalized += currentChar;
+        continue;
+      }
+
+      const nextChar = text[index + 1];
+      if (!nextChar) {
+        normalized += '\\\\';
+        replacements += 1;
+        continue;
+      }
+
+      if (this.shouldPreserveJsonEscape(nextChar, text, index + 1)) {
+        normalized += currentChar + nextChar;
+        index += 1;
+        continue;
+      }
+
+      normalized += '\\\\';
+      replacements += 1;
+    }
+
+    return { normalized, replacements };
+  }
+
+  /**
+   * 判断当前反斜杠是否属于合法且应保留的 JSON 转义。
+   * 若是 LaTeX 命令的起始反斜杠，则返回 false，后续会自动补成双反斜杠。
+   */
+  private shouldPreserveJsonEscape(nextChar: string, source: string, nextIndex: number): boolean {
+    if (nextChar === '"' || nextChar === '\\' || nextChar === '/') {
+      return true;
+    }
+
+    if (nextChar === 'u') {
+      const unicodeBody = source.slice(nextIndex + 1, nextIndex + 5);
+      if (/^[0-9a-fA-F]{4}$/.test(unicodeBody)) {
+        return true;
+      }
+
+      return !this.isLikelyLatexCommand(source, nextIndex);
+    }
+
+    if (!'bfnrt'.includes(nextChar)) {
+      return false;
+    }
+
+    return !this.isLikelyLatexCommand(source, nextIndex);
+  }
+
+  /**
+   * 仅对白名单中的数学 LaTeX 命令做自动保护，避免误伤正常的 \n / \t 等 JSON 转义。
+   */
+  private isLikelyLatexCommand(source: string, startIndex: number): boolean {
+    const commandMatch = source.slice(startIndex).match(/^[A-Za-z]+/);
+    if (!commandMatch) {
+      return false;
+    }
+
+    const command = commandMatch[0].toLowerCase();
+    const latexCommands = [
+      'alpha', 'beta', 'gamma', 'delta', 'theta', 'lambda', 'mu', 'nu', 'pi', 'phi', 'psi', 'sigma',
+      'frac', 'dfrac', 'tfrac', 'sqrt', 'sum', 'prod', 'int', 'iint', 'iiint', 'oint', 'lim',
+      'sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'ln', 'log',
+      'left', 'right', 'begin', 'end', 'text', 'mathrm', 'mathbf', 'mathbb', 'mathcal', 'displaystyle',
+      'cdot', 'times', 'div', 'pm', 'mp', 'leq', 'geq', 'neq', 'approx', 'infty', 'partial', 'nabla',
+      'rightarrow', 'leftarrow', 'leftrightarrow', 'to', 'mapsto', 'because', 'therefore',
+      'underline', 'overline', 'overrightarrow', 'hat', 'bar', 'vec', 'quad', 'qquad', 'boxed'
+    ];
+
+    return latexCommands.some((candidate) => command === candidate || command.startsWith(candidate));
+  }
+
+  /**
+   * 仅转义 JSON 字符串内部的裸换行，避免误伤外层 JSON 排版。
+   */
+  private escapeRawLineBreaksInJsonStrings(text: string): string {
+    let normalized = '';
+    let inString = false;
+
+    for (let index = 0; index < text.length; index += 1) {
+      const currentChar = text[index];
+
+      if (!inString) {
+        normalized += currentChar;
+        if (currentChar === '"') {
+          inString = true;
+        }
+        continue;
+      }
+
+      if (currentChar === '"') {
+        normalized += currentChar;
+        inString = false;
+        continue;
+      }
+
+      if (currentChar === '\\') {
+        normalized += currentChar;
+        if (index + 1 < text.length) {
+          normalized += text[index + 1];
+          index += 1;
+        }
+        continue;
+      }
+
+      if (currentChar === '\n') {
+        normalized += '\\n';
+        continue;
+      }
+
+      if (currentChar === '\r') {
+        normalized += '\\r';
+        continue;
+      }
+
+      normalized += currentChar;
+    }
+
+    return normalized;
+  }
+
   private parseWithRetry(text: string, onLog?: (log: LogEntry) => void): any {
     let jsonString = text.trim();
 
@@ -1159,14 +1307,26 @@ export class UnifiedAIService {
       return [];
     }
 
+    const protectedJson = this.protectLatexBackslashesInJson(jsonString);
+
     try {
-      return JSON.parse(jsonString);
+      if (protectedJson.replacements > 0 && onLog) {
+        onLog({
+          timestamp: new Date().toLocaleTimeString(),
+          level: 'warn',
+          message: `已自动修复 ${protectedJson.replacements} 处公式转义，避免 LaTeX 乱码。`,
+          category: 'parse',
+          suggestion: '若仍出现公式乱码，建议切换模型后重新生成。',
+        });
+      }
+
+      return JSON.parse(protectedJson.normalized);
     } catch (e) {
       try {
-        const fixed = jsonString.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+        const fixed = protectedJson.normalized.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
         return JSON.parse(fixed);
       } catch (e2) {
-        const fixed2 = jsonString.replace(/\n/g, "\\n");
+        const fixed2 = this.escapeRawLineBreaksInJsonStrings(protectedJson.normalized);
         try {
           return JSON.parse(fixed2);
         } catch (e3) {

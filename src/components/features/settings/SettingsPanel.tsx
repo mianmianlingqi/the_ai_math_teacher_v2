@@ -701,7 +701,13 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
             step="0.1"
             className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-4 py-4 text-xs font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all"
             value={config.temperature ?? 1.0}
-            onChange={(e) => onChange({ ...config, temperature: parseFloat(e.target.value) || 1.0 })}
+            onChange={(e) => {
+              const nextTemperature = Number.parseFloat(e.target.value);
+              onChange({
+                ...config,
+                temperature: Number.isNaN(nextTemperature) ? undefined : nextTemperature,
+              });
+            }}
           />
         </div>
         <div className="space-y-3">
@@ -722,12 +728,18 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
           <input
             type="number"
             data-help="请求超时时间（秒）。网络较慢或模型较慢时可适当增大，例如 300 秒。"
-            min="10"
-            step="30"
+            min="0"
+            step="1"
             className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-4 py-4 text-xs font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all"
             placeholder="300"
             value={config.timeout ?? 300}
-            onChange={(e) => onChange({ ...config, timeout: parseInt(e.target.value) || 300 })}
+            onChange={(e) => {
+              const nextTimeout = Number.parseInt(e.target.value, 10);
+              onChange({
+                ...config,
+                timeout: Number.isNaN(nextTimeout) ? undefined : nextTimeout,
+              });
+            }}
           />
         </div>
       </div>

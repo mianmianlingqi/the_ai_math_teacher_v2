@@ -1,10 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  // 统一扫描 src 目录，避免构建时遗漏工具类
   content: [
     "./index.html",
-    "./*.{ts,tsx}",
-    "./components/**/*.{ts,tsx}",
-    "./services/**/*.{ts,tsx}",
+    "./src/**/*.{js,jsx,ts,tsx}",
   ],
   theme: {
     extend: {

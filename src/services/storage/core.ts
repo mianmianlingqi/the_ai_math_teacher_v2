@@ -31,6 +31,13 @@ export const QBANK_FOLDERS_KEY     = 'ai_math_qbank_folders';
 export const QBANK_ITEMS_KEY       = 'ai_math_qbank_items';
 export const LAST_PROBLEMS_KEY     = 'ai_math_last_problems';
 
+export const STORAGE_DATA_CHANGED_EVENT = 'storage:data-changed';
+
+function notifyStorageChanged(key: string): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(STORAGE_DATA_CHANGED_EVENT, { detail: { key } }));
+}
+
 // ===== 错题本预设文件夹 =====
 
 export const ROOT_PRESET_ERROR_FOLDERS = [
@@ -224,6 +231,7 @@ export function safeReadStorage<T>(key: string, fallback: T): T {
   } catch {
     // 数据损坏：自动清除避免持续影响，返回兜底值
     localStorage.removeItem(key);
+    notifyStorageChanged(key);
     return fallback;
   }
 }
@@ -237,6 +245,20 @@ export function safeReadStorage<T>(key: string, fallback: T): T {
 export function safeWriteStorage<T>(key: string, data: T): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(data));
+    notifyStorageChanged(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 安全删除 localStorage，并广播数据变更事件。
+ */
+export function safeRemoveStorage(key: string): boolean {
+  try {
+    localStorage.removeItem(key);
+    notifyStorageChanged(key);
     return true;
   } catch {
     return false;

@@ -36,3 +36,10 @@ export const DEFAULT_CONFIG = {
   topic: '',
   count: 5,
 };
+
+export const CHAT_PANEL = {
+  MIN_WIDTH: 360,
+  MAX_WIDTH: 900,
+  DEFAULT_WIDTH: 480,
+  STORAGE_KEY_WIDTH: 'chat_panel_width',
+} as const;

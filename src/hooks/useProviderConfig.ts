@@ -77,7 +77,7 @@ export function useProviderConfig(): UseProviderConfigResult {
       ...saved,
       timeout: saved.timeout ?? 300,
       // 迁移旧版默认温度 0.8 → 1.0
-      temperature: (saved.temperature === 0.8 || !saved.temperature) ? 1.0 : saved.temperature,
+      temperature: (saved.temperature === 0.8 || saved.temperature == null) ? 1.0 : saved.temperature,
     };
   });
 
@@ -105,7 +105,35 @@ export function useProviderConfig(): UseProviderConfigResult {
     aiServiceRef.current.updateConfig(providerConfig, dualModelConfig);
   }, [providerConfig, dualModelConfig]);
 
-  // 4. 挂载时拉取后台供应商列表，并自动切换到默认模型
+  // 4. 数据导入后重新加载配置
+  useEffect(() => {
+    const handleDataImported = () => {
+      const savedProvider = storageService.getProviderConfig();
+      if (savedProvider) {
+        setProviderConfig({
+          ...savedProvider,
+          timeout: savedProvider.timeout ?? 300,
+          temperature: (savedProvider.temperature === 0.8 || savedProvider.temperature == null) ? 1.0 : savedProvider.temperature,
+        });
+      }
+
+      const savedDual = storageService.getDualModelConfig();
+      if (savedDual) {
+        setDualModelConfig(savedDual);
+      }
+
+      const savedChat = storageService.getChatConfig();
+      setChatConfig(savedChat || { provider: { ...DEFAULT_PROVIDER_CONFIG, apiKey: '', temperature: 0.7 } });
+
+      const savedVision = storageService.getVisionConfig();
+      setVisionConfig(savedVision || { provider: { ...DEFAULT_VISION_CONFIG } });
+    };
+
+    window.addEventListener('data:imported', handleDataImported);
+    return () => window.removeEventListener('data:imported', handleDataImported);
+  }, []);
+
+  // 5. 挂载时拉取后台供应商列表，并自动切换到默认模型
   useEffect(() => {
     if (!isBackendEnabled()) return;
 

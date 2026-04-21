@@ -2,12 +2,18 @@
   "name": "the-ai-math-teacher",
   "private": true,
   "version": "0.0.0",
+  "description": "AI 数学老师桌面应用与网页端工程",
+  "author": "GitHub Copilot",
+  "main": "electron/main.mjs",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host --no-open",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "electron:dev": "concurrently -k \"npm run dev\" \"wait-on -t 30000 tcp:5173 && electron .\"",
+    "electron:build": "npm run build",
+    "electron:dist:win": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
@@ -24,8 +30,40 @@
     "@types/node": "^22.14.0",
     "@vercel/node": "^5.6.6",
     "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.aimath.teacher.desktop",
+    "productName": "AI数学老师",
+    "asar": true,
+    "directories": {
+      "output": "desktop-dist"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.mjs"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "AI-Math-Teacher-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "overrides": {
     "rimraf": "6.1.3",

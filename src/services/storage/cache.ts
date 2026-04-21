@@ -7,23 +7,53 @@
  *      其他子域模块均不依赖此文件，避免循环依赖。
  */
 
-import { MathProblem, WrongProblemFolder, NoteFolder, QBankFolder } from '@/types';
+import { MathProblem, WrongProblemFolder, NoteFolder, QBankFolder, AIProviderConfig } from '@/types';
 import {
   DEFAULT_FOLDER, DEFAULT_FOLDER_ID,
   DEFAULT_NOTE_FOLDER, DEFAULT_NOTE_FOLDER_ID,
   DEFAULT_QBANK_FOLDER, DEFAULT_QBANK_FOLDER_ID,
 } from '@/types';
+import { DEFAULT_PROVIDER_CONFIG } from '@/constants';
 import {
   STORAGE_KEY, CUSTOM_ERRORS_KEY, API_KEYS_STORAGE_KEY,
   PROVIDER_CONFIG_KEY, DUAL_MODEL_CONFIG_KEY, CHAT_CONFIG_KEY, VISION_CONFIG_KEY,
   NOTE_FOLDERS_KEY, NOTES_KEY, QBANK_FOLDERS_KEY, QBANK_ITEMS_KEY,
   LAST_PROBLEMS_KEY, FOLDERS_KEY,
-  normalizeFolderCollection, normalizeCustomErrors, safeReadStorage, safeWriteStorage,
+  normalizeFolderCollection, normalizeCustomErrors, safeReadStorage, safeRemoveStorage, safeWriteStorage,
 } from './core';
 import { wrongProblemStorageService } from './wrongProblem';
 import { noteStorageService } from './notes';
 import { qbankStorageService } from './qbank';
 import { settingsStorageService } from './settings';
+
+// ===== AIProviderConfig 字段补全工具函数 =====
+
+/**
+ * 补全 AIProviderConfig 字段，确保所有必需字段存在。
+ * 用于导入时恢复自定义供应商配置，防止字段缺失导致设置面板显示异常。
+ *
+ * @param config - 从备份中读取的 provider 配置对象
+ * @returns 补全后的 AIProviderConfig 对象
+ */
+function normalizeProviderConfig(config: unknown): AIProviderConfig {
+  if (!config || typeof config !== 'object') {
+    return { ...DEFAULT_PROVIDER_CONFIG };
+  }
+
+  const c = config as Record<string, unknown>;
+
+  return {
+    id: typeof c.id === 'string' ? c.id : DEFAULT_PROVIDER_CONFIG.id,
+    name: typeof c.name === 'string' ? c.name : DEFAULT_PROVIDER_CONFIG.name,
+    baseURL: typeof c.baseURL === 'string' ? c.baseURL : DEFAULT_PROVIDER_CONFIG.baseURL,
+    apiKey: typeof c.apiKey === 'string' ? c.apiKey : '',
+    model: typeof c.model === 'string' ? c.model : DEFAULT_PROVIDER_CONFIG.model,
+    maxTokens: typeof c.maxTokens === 'number' ? c.maxTokens : DEFAULT_PROVIDER_CONFIG.maxTokens,
+    temperature: typeof c.temperature === 'number' ? c.temperature : DEFAULT_PROVIDER_CONFIG.temperature,
+    timeout: typeof c.timeout === 'number' ? c.timeout : (DEFAULT_PROVIDER_CONFIG.timeout ?? 300),
+    backendProvider: typeof c.backendProvider === 'string' ? c.backendProvider : undefined,
+  };
+}
 
 export const problemCacheStorageService = {
 
@@ -38,7 +68,7 @@ export const problemCacheStorageService = {
   },
 
   clearLastProblems(): void {
-    localStorage.removeItem(LAST_PROBLEMS_KEY);
+    safeRemoveStorage(LAST_PROBLEMS_KEY);
   },
 
   // ===== 全量数据导出 =====
@@ -64,8 +94,9 @@ export const problemCacheStorageService = {
       notes: noteStorageService.getNotes(),
       qbankFolders: qbankStorageService.getQBankFolders(),
       qbankItems: qbankStorageService.getQBankItems(),
+      lastProblems: this.getLastProblems(),
       exportedAt: new Date().toISOString(),
-      version: '4.1',
+      version: '4.2',
     };
     return JSON.stringify(data, null, 2);
   },
@@ -133,22 +164,41 @@ export const problemCacheStorageService = {
 
       // 6. 导入当前模型配置（可选）
       if (data.currentConfig && typeof data.currentConfig === 'object') {
-        safeWriteStorage(PROVIDER_CONFIG_KEY, data.currentConfig);
+        const normalizedConfig = normalizeProviderConfig(data.currentConfig);
+        safeWriteStorage(PROVIDER_CONFIG_KEY, normalizedConfig);
       }
 
       // 7. 导入双模型配置（可选）
       if (data.dualModelConfig && typeof data.dualModelConfig === 'object') {
-        safeWriteStorage(DUAL_MODEL_CONFIG_KEY, data.dualModelConfig);
+        const normalizedDualConfig = {
+          ...data.dualModelConfig,
+          provider: data.dualModelConfig.provider
+            ? normalizeProviderConfig(data.dualModelConfig.provider)
+            : null,
+        };
+        safeWriteStorage(DUAL_MODEL_CONFIG_KEY, normalizedDualConfig);
       }
 
       // 8. 导入答疑对话模型配置（可选）
       if (data.chatConfig && typeof data.chatConfig === 'object') {
-        safeWriteStorage(CHAT_CONFIG_KEY, data.chatConfig);
+        const normalizedChatConfig = {
+          ...data.chatConfig,
+          provider: data.chatConfig.provider
+            ? normalizeProviderConfig(data.chatConfig.provider)
+            : null,
+        };
+        safeWriteStorage(CHAT_CONFIG_KEY, normalizedChatConfig);
       }
 
       // 9. 导入视觉识别配置（可选）
       if (data.visionConfig && typeof data.visionConfig === 'object') {
-        safeWriteStorage(VISION_CONFIG_KEY, data.visionConfig);
+        const normalizedVisionConfig = {
+          ...data.visionConfig,
+          provider: data.visionConfig.provider
+            ? normalizeProviderConfig(data.visionConfig.provider)
+            : null,
+        };
+        safeWriteStorage(VISION_CONFIG_KEY, normalizedVisionConfig);
       }
 
       // 10. 导入笔记文件夹（可选）
@@ -186,6 +236,13 @@ export const problemCacheStorageService = {
         safeWriteStorage(QBANK_ITEMS_KEY, qbankItems);
         types.push('题库');
         importCount += qbankItems.length;
+      }
+
+      // 14. 导入最近一次生成题目缓存（可选）
+      if (Array.isArray(data.lastProblems)) {
+        safeWriteStorage(LAST_PROBLEMS_KEY, data.lastProblems);
+      } else {
+        safeRemoveStorage(LAST_PROBLEMS_KEY);
       }
 
       const summary = types.length > 0 ? types.join('/') : '配置数据';

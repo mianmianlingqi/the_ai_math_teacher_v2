@@ -14,24 +14,28 @@ View your app in AI Studio: https://ai.studio/apps/12154fd4-0788-41bd-bb72-a0ce8
 
 ### 快速启动
 
-1. **Windows**: 双击 `启动程序.bat`
-2. **Mac/Linux**: 在终端运行 `./start.sh`
+1. 安装前端依赖：
+   ```bash
+   npm install
+   ```
+2. 启动前端开发服务器：
+   ```bash
+   npm run dev
+   ```
+3. 如需本地联调后端，进入 `backend/` 后执行：
+   ```bash
+   npm install
+   npm run dev
+   ```
 
-程序会自动执行以下步骤：
-- ✅ 检查 Node.js 环境
-- ✅ 检测和补全依赖包
-- ✅ 修复不完整的依赖关系
-- ✅ 启动应用并自动打开浏览器
-
-首次运行可能需要 1-2 分钟用于依赖安装。
+当前仓库已经直接以工作区根目录作为项目根目录，不再使用额外的嵌套项目目录。
 
 ### 功能特性
 
-**自动依赖检测和补全：**
-- 深度检查 node_modules 中的所有依赖
-- 自动检测缺失的包并安装
-- 自动修复不完整或损坏的依赖树
-- 支持离线模式（使用 npm ci + package-lock.json）
+**当前技术栈：**
+- 前端：React 19 + Vite 6 + Tailwind CSS 3
+- 后端：Node.js + TypeScript + Railway
+- 分层：`src/services/` 下按 `ai / api / storage` 拆分
 
 ### 首次使用
 
@@ -41,36 +45,44 @@ View your app in AI Studio: https://ai.studio/apps/12154fd4-0788-41bd-bb72-a0ce8
 
 ### 手动启动 (开发者模式)
 
-1. 安装依赖:
+1. 安装前端依赖:
    ```bash
    npm install
    ```
-2. 运行应用:
+2. 运行前端应用:
    ```bash
    npm run dev
    ```
-3. 构建生产版本:
+3. 构建前端生产版本:
    ```bash
    npm run build
    ```
+4. 安装并运行后端（可选）:
+   ```bash
+   cd backend
+   npm install
+   npm run dev
+   ```
 
-### 开发者实时用量监控（独立外置脚本）
-
-启动项目后，可在浏览器单独打开：
+### 项目结构
 
 ```text
-http://localhost:3000/dev-monitor.html
+.
+├── .github/               # Copilot 协作规范与仓库级配置
+├── backend/               # Railway 后端项目
+│   ├── src/               # 后端源码入口、路由、中间件、数据库模块
+│   └── railway.toml       # Railway 部署配置
+├── src/                   # 前端源码
+│   ├── components/        # UI 组件
+│   ├── constants/         # 静态配置
+│   ├── hooks/             # React 自定义 Hooks
+│   ├── services/          # ai / api / storage 服务分层
+│   ├── styles/            # 全局样式
+│   └── types/             # TypeScript 类型定义
+├── index.html             # Vite HTML 入口
+├── package.json           # 前端依赖与脚本
+└── vite.config.ts         # Vite 配置
 ```
-
-监控页会实时显示：
-- 当前正在运行的模型（Provider / Model / Channel）
-- 累计请求成功/失败数
-- Prompt / Completion / Total Token 消耗
-- 最近请求记录（部分流式场景会显示“估算 token”）
-
-Windows 下使用 `启动程序.bat` 时，会自动探测实际开发端口（3000-3010）并自动打开对应端口的监控页，无需手动修改 URL。
-
-监控页本身也会自动探测活跃端口（3000-3010）并读取实时统计数据，即使主程序与监控页不在同一端口也可正常工作。
 
 ### 故障排除
 
@@ -90,19 +102,6 @@ Windows 下使用 `启动程序.bat` 时，会自动探测实际开发端口（3
 
 3. **检查网络连接：**
    确保你的网络可以访问 npm registry (registry.npmjs.org)
-
-### 项目结构
-
-```
-.
-├── components/          # React 组件
-├── services/            # 服务层（API、存储等）
-├── App.tsx              # 主应用组件
-├── index.tsx            # 应用入口
-├── package.json         # 依赖配置
-├── vite.config.ts       # Vite 配置
-└── check-dependencies.js # 自动依赖检测脚本
-```
 
 ### Railway 后端部署约定
 

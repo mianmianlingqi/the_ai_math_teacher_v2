@@ -6,8 +6,8 @@ import { streamChat } from '@/services/ai/chatService';
 import { storageService, getChildFolders, getFolderPath } from '@/services/storage';
 import { folderManagerApi } from '@/services/api/folderApi';
 import { referenceSelectorApi } from '@/services/api/refApi';
-import { DEFAULT_PROVIDER_CONFIG } from '@/constants';
-import { extractPdfText } from '@/services/api/pdfApi';
+import { DEFAULT_PROVIDER_CONFIG, CHAT_PANEL } from '@/constants';
+import { convertPdfToMarkdown } from '@/services/api/pdfApi';
 
 const MAX_PENDING_FILES = 3;
 const MAX_TEXT_CHARS = 12000;
@@ -102,12 +102,6 @@ const readFileAsDataURL = (file: File): Promise<string> => {
     reader.onerror = () => reject(new Error('读取图片失败'));
     reader.readAsDataURL(file);
   });
-};
-
-const readFileAsBase64 = async (file: File): Promise<string> => {
-  const dataUrl = await readFileAsDataURL(file);
-  const commaIndex = dataUrl.indexOf(',');
-  return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
 };
 
 interface ChatPanelProps {
@@ -886,6 +880,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
   const dragCounterRef = useRef(0);
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // 面板宽度状态
+  const [panelWidth, setPanelWidth] = useState(() => {
+    if (typeof window === 'undefined') return CHAT_PANEL.DEFAULT_WIDTH;
+    const saved = localStorage.getItem(CHAT_PANEL.STORAGE_KEY_WIDTH);
+    return saved ? Math.max(CHAT_PANEL.MIN_WIDTH, Math.min(CHAT_PANEL.MAX_WIDTH, parseInt(saved, 10))) : CHAT_PANEL.DEFAULT_WIDTH;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartXRef = useRef(0);
+  const resizeStartWidthRef = useRef(CHAT_PANEL.DEFAULT_WIDTH);
+
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current;
     if (container) {
@@ -992,54 +996,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
 
       try {
         if (isPdf) {
-          let markdownText = '';
-          let truncated = false;
-
-          try {
-            const base64Data = await readFileAsBase64(file);
-            const response = await fetch('/api/convert-pdf', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ filename: fileName, dataBase64: base64Data }),
-            });
-
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}`);
-            }
-
-            const data = await response.json();
-            if (!data?.success || !data?.markdown) {
-              throw new Error(data?.error || 'markitdown 转换失败');
-            }
-
-            markdownText = String(data.markdown || '');
-          } catch (err: any) {
-            showToast(`MarkItDown 转换失败，已尝试本地解析：${err?.message || '未知错误'}`, 3200);
+          const pdfResult = await convertPdfToMarkdown(file, MAX_TEXT_CHARS);
+          if (pdfResult.fallbackMessage) {
+            showToast(`MarkItDown 转换失败，已尝试本地解析：${pdfResult.fallbackMessage}`, 3200);
           }
-
-          if (!markdownText) {
-            const pdf = await extractPdfText(file, MAX_TEXT_CHARS);
-            if (pdf.scannedLike) {
-              skippedScanPdf++;
-              continue;
-            }
-            markdownText = pdf.text;
-            truncated = pdf.truncated;
-          } else if (markdownText.length > MAX_TEXT_CHARS) {
-            markdownText = markdownText.slice(0, MAX_TEXT_CHARS);
-            truncated = true;
+          if (pdfResult.scannedLike) {
+            skippedScanPdf++;
+            continue;
           }
 
           nextAttachments.push({
             name: fileName,
             type: fileType,
             size: file.size,
-            encoding: 'MarkItDown',
-            textContent: markdownText,
-            truncated,
+            encoding: pdfResult.encoding,
+            textContent: pdfResult.text,
+            truncated: pdfResult.truncated,
           });
 
-          showToast(`${fileName} 已转换为 Markdown${truncated ? '（已截断）' : ''}`, 2400);
+          showToast(`${fileName} 已转换为${pdfResult.encoding === 'MarkItDown' ? ' Markdown' : ' 文本'}${pdfResult.truncated ? '（已截断）' : ''}`, 2400);
           continue;
         }
 
@@ -1354,6 +1329,42 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
     }
   };
 
+  // 开始拖拽调整宽度
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartXRef.current = e.clientX;
+    resizeStartWidthRef.current = panelWidth;
+  }, [panelWidth]);
+
+  // 拖拽中
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = resizeStartXRef.current - e.clientX;
+      const newWidth = Math.max(CHAT_PANEL.MIN_WIDTH, Math.min(CHAT_PANEL.MAX_WIDTH, resizeStartWidthRef.current + deltaX));
+      setPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      localStorage.setItem(CHAT_PANEL.STORAGE_KEY_WIDTH, panelWidth.toString());
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing, panelWidth]);
+
   if (!isOpen) return null;
 
   return (
@@ -1383,7 +1394,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
       <div className="absolute inset-0 bg-black/20 backdrop-blur-sm animate-overlayIn" onClick={onClose}></div>
 
       {/* Panel */}
-      <div className="relative w-full sm:w-[480px] h-[85vh] sm:h-[90vh] sm:mr-6 bg-white rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-slideUp" style={{animationDuration:'0.4s'}}>
+      <div
+        className="relative h-[85vh] sm:h-[90vh] sm:mr-6 bg-white rounded-t-[2rem] sm:rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-slideUp"
+        style={{
+          animationDuration: '0.4s',
+          width: typeof window !== 'undefined' && window.innerWidth >= 640 ? `${panelWidth}px` : '100%',
+        }}
+      >
+        {/* 左侧拉伸手柄 */}
+        <div
+          className={`absolute left-0 top-0 bottom-0 w-4 z-10 flex items-center justify-center cursor-ew-resize transition-colors ${
+            isResizing ? 'bg-indigo-200/50' : 'hover:bg-slate-100/50'
+          }`}
+          onMouseDown={handleResizeStart}
+          title="拖拽调整宽度"
+        >
+          <div className={`w-1 h-8 rounded-full transition-colors ${
+            isResizing ? 'bg-indigo-400' : 'bg-slate-300 hover:bg-indigo-400'
+          }`} />
+        </div>
 
         {/* Problem Selector Overlay */}
         <ProblemSelector
@@ -1398,7 +1427,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
         />
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0 pl-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center text-white shadow-lg transition-transform duration-300 hover:scale-110 hover:rotate-6">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1433,7 +1462,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
         </div>
 
         {/* Messages */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4 custom-scrollbar">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-4 pl-6 space-y-4 custom-scrollbar">
           {!isConfigured && (
             <div className="mx-auto max-w-xs text-center py-12">
               <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-400 mx-auto mb-4">
@@ -1551,7 +1580,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ isOpen, onClose, currentPr
 
         {/* Input Area */}
         {isConfigured && (
-          <div className="flex-shrink-0 border-t border-slate-100 p-4">
+          <div className="flex-shrink-0 border-t border-slate-100 p-4 pl-6">
             {/* Selected problem badge */}
             {selectedProblem && (
               <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-indigo-50 rounded-xl border border-indigo-100 animate-fadeIn">

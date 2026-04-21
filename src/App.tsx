@@ -18,7 +18,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Syllabus, Difficulty, QuestionType, MathProblem, GenerateConfig } from '@/types';
 import { SYLLABUS_OPTIONS, DIFFICULTY_OPTIONS, QUESTION_TYPE_OPTIONS, SYLLABUS_CHAPTERS, CHAPTER_TOPICS, DEFAULT_CONFIG } from '@/constants';
 import { storageService } from '@/services/storage';
-import { exportData, importFromServer, restoreByFilename } from '@/services/api/backupApi';
+import { autoBackupData, exportData, importFromServer, restoreByFilename } from '@/services/api/backupApi';
 import { ProblemCard } from '@/components/features/problem/ProblemCard';
 import { Logger } from '@/components/features/dev/Logger';
 import { WrongProblemBook } from '@/components/features/storage/WrongProblemBook';
@@ -38,6 +38,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useProviderConfig } from '@/hooks/useProviderConfig';
 import { useGenerateProblems, CUSTOM_CHAPTER_KEY } from '@/hooks/useGenerateProblems';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { STORAGE_DATA_CHANGED_EVENT } from '@/services/storage/core';
 import toast, { Toaster } from 'react-hot-toast';
 
 // ===== 工具函数 =====
@@ -150,6 +151,30 @@ const App: React.FC = () => {
     const handleDataImported = () => setResetKey(k => k + 1);
     window.addEventListener('data:imported', handleDataImported);
     return () => window.removeEventListener('data:imported', handleDataImported);
+  }, []);
+
+  useEffect(() => {
+    let backupTimer: number | null = null;
+
+    const scheduleAutoBackup = () => {
+      if (backupTimer !== null) {
+        window.clearTimeout(backupTimer);
+      }
+      // 防抖合并连续写入，避免同一次操作生成过多自动备份请求。
+      backupTimer = window.setTimeout(() => {
+        void autoBackupData({ reason: '内容变更' });
+      }, 1200);
+    };
+
+    void autoBackupData({ reason: '应用启动' });
+    window.addEventListener(STORAGE_DATA_CHANGED_EVENT, scheduleAutoBackup);
+
+    return () => {
+      if (backupTimer !== null) {
+        window.clearTimeout(backupTimer);
+      }
+      window.removeEventListener(STORAGE_DATA_CHANGED_EVENT, scheduleAutoBackup);
+    };
   }, []);
 
   // 大纲切换时：重置为第一个合法章节，清空知识点选择

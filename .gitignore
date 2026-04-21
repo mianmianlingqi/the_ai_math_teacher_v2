@@ -33,3 +33,12 @@ backup/
 
 # Vercel build cache
 .vercel/
+
+# Desktop build artifacts
+desktop-dist/
+desktop-dist-repack/
+
+# Workspace tooling
+.mcp-debug-tools/
+.opencode
+.trae/

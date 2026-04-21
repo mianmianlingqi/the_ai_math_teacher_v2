@@ -6,6 +6,69 @@ export interface PdfExtractResult {
   scannedLike: boolean;
 }
 
+export interface PdfConversionResult {
+  text: string;
+  truncated: boolean;
+  scannedLike: boolean;
+  encoding: 'MarkItDown' | 'PDF.js';
+  fallbackMessage?: string;
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('读取 PDF 文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function readFileAsBase64(file: File): Promise<string> {
+  const dataUrl = await readFileAsDataURL(file);
+  const commaIndex = dataUrl.indexOf(',');
+  return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+}
+
+export async function convertPdfToMarkdown(file: File, maxChars: number = 12000): Promise<PdfConversionResult> {
+  try {
+    const response = await fetch('/api/convert-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.name || 'upload.pdf',
+        dataBase64: await readFileAsBase64(file),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data?.success || !data?.markdown) {
+      throw new Error(data?.error || 'markitdown 转换失败');
+    }
+
+    const originalText = String(data.markdown || '');
+    const truncated = originalText.length > maxChars;
+    return {
+      text: truncated ? originalText.slice(0, maxChars) : originalText,
+      truncated,
+      scannedLike: false,
+      encoding: 'MarkItDown',
+    };
+  } catch (error: any) {
+    const pdf = await extractPdfText(file, maxChars);
+    return {
+      text: pdf.text,
+      truncated: pdf.truncated,
+      scannedLike: pdf.scannedLike,
+      encoding: 'PDF.js',
+      fallbackMessage: error?.message || 'MarkItDown 转换失败',
+    };
+  }
+}
+
 export async function extractPdfText(file: File, maxChars: number = 12000): Promise<PdfExtractResult> {
   const pdfjsLib = await import('pdfjs-dist');
   const raw = await file.arrayBuffer();

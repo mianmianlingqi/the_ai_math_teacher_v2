@@ -55,11 +55,10 @@ interface ProblemCardProps {
 export const ProblemCard: React.FC<ProblemCardProps> = ({ problem, index, isSaved: initialIsSaved = false, onSavedChange }) => {
   const [showSolution, setShowSolution] = useState(false);
 
-  // 判断当前是否处于流式解析中
-  // Why: 流式模式下 explanation 逐字填充但 answer 尚为空，
-  //      需要区分「骨架屏等待」「流式输出中」「解析完成」三种状态。
+  // 判断当前是否处于流式解析中。
+  // Why: answer 为空并不代表解析未完成，必须使用独立状态位避免误伤收录按钮。
   const isExplanationPlaceholder = problem.explanation === '解析生成中...';
-  const isStreaming = !isExplanationPlaceholder && !problem.answer && problem.explanation.length > 0;
+  const isStreaming = Boolean(problem.isExplanationStreaming);
   const isExplanationReady = !isExplanationPlaceholder && !isStreaming && problem.explanation.length > 0;
 
   // 解析占位期间或流式输出期间自动展开解析区域；

@@ -219,7 +219,12 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
         earlyShownStemIds = stems.map(s => s.id);
         setProblems(prev => [
           ...prev,
-          ...stems.map(s => ({ ...s, answer: '', explanation: '解析生成中...' })),
+          ...stems.map(s => ({
+            ...s,
+            answer: '',
+            explanation: '解析生成中...',
+            isExplanationStreaming: true,
+          })),
         ]);
       };
 
@@ -238,7 +243,7 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
         setProblems(prev =>
           prev.map(p =>
             earlyShownStemIds.includes(p.id)
-              ? { ...p, explanation: currentBuffer }
+              ? { ...p, explanation: currentBuffer, isExplanationStreaming: true }
               : p
           )
         );
@@ -298,7 +303,12 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
             return false;
           });
 
-          if (filtered.length === 0) {
+          const completedProblems = filtered.map(problem => ({
+            ...problem,
+            isExplanationStreaming: false,
+          }));
+
+          if (completedProblems.length === 0) {
             // 去重失败：移除已提前展示的題干占位
             if (earlyShownStemIds.length > 0) {
               setProblems(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
@@ -309,7 +319,7 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
 
           completedCount++;
           successCount++;
-          acceptedProblemsInBatch.push(...filtered);
+          acceptedProblemsInBatch.push(...completedProblems);
           markGenerationTargetReached();
 
           // 用含解析的完整题目替换占位；若题干未提前展示（如网络失败重试后成功），则直接追加
@@ -318,11 +328,11 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
             if (earlyShownStemIds.length > 0) {
               // 替换占位：按 id 查找并更新
               updated = prev.map(p => {
-                const full = filtered.find(f => f.id === p.id);
+                const full = completedProblems.find(f => f.id === p.id);
                 return full ?? p;
               });
             } else {
-              updated = [...prev, ...filtered];
+              updated = [...prev, ...completedProblems];
             }
             storageService.saveLastProblems(updated);
             return updated;
@@ -334,7 +344,7 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
             message: `[进度 ${completedCount}/${totalCount}] 第 ${index + 1} 号题目已生成${attempt > 0 ? `（第 ${attempt + 1} 次尝试）` : ''}。`,
           });
 
-          return filtered;
+          return completedProblems;
         } catch (error: any) {
           // 本次 attempt 失败：若题干已提前展示，先从 UI 移除占位，然后重试
           if (earlyShownStemIds.length > 0) {

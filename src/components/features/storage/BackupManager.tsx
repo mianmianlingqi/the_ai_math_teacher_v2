@@ -2,12 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import { showConfirm } from '@/services/api/confirmService';
-
-interface BackupFile {
-  name: string;
-  time: string;
-  size: number;
-}
+import { deleteBackup, listBackups, type BackupFile } from '@/services/api/backupApi';
 
 interface BackupManagerProps {
   isOpen: boolean;
@@ -39,9 +34,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({ isOpen, onClose, o
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/list-backups');
-      if (!res.ok) throw new Error('无法连接备份服务');
-      const data = await res.json();
+      const data = await listBackups();
       setFiles(data);
     } catch (err: any) {
       setError(err.message);
@@ -73,13 +66,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({ isOpen, onClose, o
 
     setBusyFile(filename);
     try {
-      const res = await fetch(`/api/delete-backup?filename=${encodeURIComponent(filename)}`, {
-        method: 'DELETE',
-      });
-      const result = await res.json();
-      if (!res.ok || !result.success) {
-        throw new Error(result?.error || '删除失败');
-      }
+      await deleteBackup(filename);
       setFiles(prev => prev.filter(file => file.name !== filename));
     } catch (err: any) {
       toast.error('删除失败：' + (err?.message || '未知错误'));
@@ -93,6 +80,8 @@ export const BackupManager: React.FC<BackupManagerProps> = ({ isOpen, onClose, o
       onClose();
     }
   };
+
+  const latestPreferredBackup = filteredFiles[0];
 
   if (!isOpen) return null;
 
@@ -146,10 +135,10 @@ export const BackupManager: React.FC<BackupManagerProps> = ({ isOpen, onClose, o
               <option value={8}>8/页</option>
             </select>
             <button
-              onClick={() => files[0] && onRestore(files[0].name)}
-              disabled={files.length === 0}
+              onClick={() => latestPreferredBackup && onRestore(latestPreferredBackup.name)}
+              disabled={!latestPreferredBackup}
               className="px-3 py-2 rounded-lg text-xs font-semibold bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-              title="恢复最新备份"
+              title="优先恢复最新手动备份；若没有手动备份，则恢复自动备份"
             >
               恢复最新
             </button>
@@ -188,7 +177,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({ isOpen, onClose, o
                         {file.name}
                       </p>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                        {new Date(file.time).toLocaleString()} · {formatSize(file.size)}
+                        {new Date(file.time).toLocaleString()} · {formatSize(file.size)}{file.isAuto ? ' · 自动快照' : ' · 手动备份'}
                       </p>
                     </div>
                   </div>
@@ -242,7 +231,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({ isOpen, onClose, o
         </div>
         
         <div className="p-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-700 text-xs text-gray-500 text-center">
-             备份文件存储在项目根目录的 <code className="bg-gray-200 dark:bg-gray-700 px-1 py-0.5 rounded">backup/</code> 文件夹中
+             网页版备份默认存储在项目根目录的 <code className="bg-gray-200 dark:bg-gray-700 px-1 py-0.5 rounded">backup/</code>；桌面版会自动切换到应用数据目录
         </div>
       </div>
     </div>,
