@@ -2,6 +2,7 @@
 import { AIProviderConfig, ChatMessage } from '@/types';
 import { endUsageRequest, estimateTokensFromText, extractOpenAIUsage, startUsageRequest } from './devUsageTracker';
 import { isReasoningModel, normalizeBaseURL, buildAuthHeaders, getTimeoutMs, getHttpErrorInfo } from './httpClient';
+import { recordModelRequest, recordModelResponse } from '../dev/adminConsoleStore';
 
 const formatFileSize = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -125,6 +126,13 @@ export async function streamChat(
     requestBody.max_tokens = provider.maxTokens;
   }
 
+  const adminRequestId = recordModelRequest({
+    channel: 'chat_stream',
+    provider,
+    requestBody,
+    messages: apiMessages as Array<{ role?: string; content?: unknown }>,
+  });
+
   const headers = buildAuthHeaders(provider);
 
   const controller = new AbortController();
@@ -229,6 +237,17 @@ export async function streamChat(
       usage,
     });
 
+    recordModelResponse({
+      requestId: adminRequestId,
+      channel: 'chat_stream',
+      provider,
+      responseBody: { content: fullText, usage, stream: true },
+      assistantContent: fullText,
+      usage,
+      latencyMs: Date.now() - startTime,
+      success: true,
+    });
+
     callbacks.onDone(fullText);
   } catch (error: any) {
     clearTimeout(timeoutId);
@@ -237,6 +256,15 @@ export async function streamChat(
       success: false,
       latencyMs: Date.now() - startTime,
       error: error?.message,
+    });
+    recordModelResponse({
+      requestId: adminRequestId,
+      channel: 'chat_stream',
+      provider,
+      responseBody: null,
+      latencyMs: Date.now() - startTime,
+      success: false,
+      error: error?.message || '对话流式请求失败',
     });
     if (error.name === 'AbortError') {
       callbacks.onError('请求已取消或超时。');

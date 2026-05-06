@@ -30,6 +30,9 @@ export const NOTES_KEY             = 'ai_math_notes';
 export const QBANK_FOLDERS_KEY     = 'ai_math_qbank_folders';
 export const QBANK_ITEMS_KEY       = 'ai_math_qbank_items';
 export const LAST_PROBLEMS_KEY     = 'ai_math_last_problems';
+export const EXAM_PAPERS_KEY       = 'ai_math_exam_papers';
+export const ACTIVE_EXAM_PAPER_KEY = 'ai_math_active_exam_paper';
+export const APP_UI_SETTINGS_KEY   = 'ai_math_app_ui_settings';
 
 export const STORAGE_DATA_CHANGED_EVENT = 'storage:data-changed';
 

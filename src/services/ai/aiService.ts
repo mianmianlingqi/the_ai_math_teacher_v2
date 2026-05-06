@@ -2,6 +2,7 @@
 import { endUsageRequest, extractOpenAIUsage, startUsageRequest, estimateTokensFromText } from "./devUsageTracker";
 import { aiApi, tokenStore, BACKEND_BASE_URL } from "../api/backendApi";
 import { isReasoningModel, normalizeBaseURL, buildAuthHeaders, getTimeoutMs, getHttpErrorInfo } from "./httpClient";
+import { recordModelRequest, recordModelResponse } from "../dev/adminConsoleStore";
 
 /**
  * 流式解析回调：每个 token 到达时通知调用方更新 UI。
@@ -24,6 +25,11 @@ export interface ExplanationStreamCallbacks {
 export class UnifiedAIService {
   private providerConfig: AIProviderConfig;
   private dualModelConfig: DualModelConfig;
+
+  private getStreamIdleTimeoutMs(provider: AIProviderConfig): number {
+    const totalTimeoutMs = getTimeoutMs(provider);
+    return Math.min(totalTimeoutMs, 45000);
+  }
 
   private sanitizeErrorMessage(message: string): string {
     if (!message) return '模型返回异常，请稍后重试。';
@@ -326,11 +332,25 @@ export class UnifiedAIService {
     provider: AIProviderConfig,
     messages: any[],
     onLog: (log: LogEntry) => void,
-    isJsonMode: boolean
+    isJsonMode: boolean,
+    abortSignal?: AbortSignal,
   ): Promise<{ content: string; elapsedSec: string }> {
     // ===== 本地网关转发模式 =====
     if (provider.backendProvider) {
       const startTime = Date.now();
+      const gatewayRequestBody = {
+        provider: provider.backendProvider,
+        model: provider.model,
+        messages,
+        temperature: provider.temperature,
+        max_tokens: provider.maxTokens,
+      };
+      const adminRequestId = recordModelRequest({
+        channel: 'problem_generation_gateway',
+        provider,
+        requestBody: gatewayRequestBody,
+        messages,
+      });
       try {
         const data = await aiApi.chat(
           provider.backendProvider,
@@ -339,12 +359,35 @@ export class UnifiedAIService {
           {
             temperature: provider.temperature,
             max_tokens: provider.maxTokens,
-          }
+          },
+          abortSignal,
         );
         const content = data?.choices?.[0]?.message?.content ?? '';
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+        recordModelResponse({
+          requestId: adminRequestId,
+          channel: 'problem_generation_gateway',
+          provider,
+          responseBody: data,
+          assistantContent: content,
+          usage: extractOpenAIUsage(data?.usage),
+          latencyMs: Date.now() - startTime,
+          success: true,
+        });
         return { content, elapsedSec };
       } catch (err: any) {
+        recordModelResponse({
+          requestId: adminRequestId,
+          channel: 'problem_generation_gateway',
+          provider,
+          responseBody: null,
+          latencyMs: Date.now() - startTime,
+          success: false,
+          error: err?.message || '本地网关请求失败',
+        });
+        if (err?.name === 'AbortError' || abortSignal?.aborted) {
+          throw err;
+        }
         // "Failed to fetch" = 网络层失败（CORS 被拦截、服务未启动或地址不通）
         // "401" / "403"      = 网关鉴权失败（远程网关模式）
         const isFetchError = err.message === 'Failed to fetch' || err.message?.includes('NetworkError');
@@ -393,11 +436,25 @@ export class UnifiedAIService {
       requestBody.max_tokens = provider.maxTokens;
     }
 
+    const adminRequestId = recordModelRequest({
+      channel: 'problem_generation',
+      provider,
+      requestBody,
+      messages,
+    });
+
     try {
       const headers = buildAuthHeaders(provider);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          controller.abort();
+        } else {
+          abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+        }
+      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -447,6 +504,17 @@ export class UnifiedAIService {
         usage,
       });
 
+      recordModelResponse({
+        requestId: adminRequestId,
+        channel: 'problem_generation',
+        provider,
+        responseBody: data,
+        assistantContent: content,
+        usage,
+        latencyMs: Date.now() - startTime,
+        success: true,
+      });
+
       return { content, elapsedSec };
     } catch (error: any) {
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -458,7 +526,20 @@ export class UnifiedAIService {
         error: error?.message,
       });
 
+      recordModelResponse({
+        requestId: adminRequestId,
+        channel: 'problem_generation',
+        provider,
+        responseBody: null,
+        latencyMs: Date.now() - startTime,
+        success: false,
+        error: error?.message || '模型请求失败',
+      });
+
       if (error.name === 'AbortError') {
+        if (abortSignal?.aborted) {
+          throw error;
+        }
         onLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'error',
@@ -506,11 +587,12 @@ export class UnifiedAIService {
     provider: AIProviderConfig,
     messages: any[],
     callbacks: ExplanationStreamCallbacks,
-    onLog: (log: LogEntry) => void
+    onLog: (log: LogEntry) => void,
+    abortSignal?: AbortSignal,
   ): Promise<{ content: string; elapsedSec: string }> {
     // 网关转发模式暂不支持流式，回退到非流式 + 模拟一次性推送
     if (provider.backendProvider) {
-      const result = await this.fetchModelCompletion(provider, messages, onLog, true);
+      const result = await this.fetchModelCompletion(provider, messages, onLog, true, abortSignal);
       callbacks.onToken(result.content);
       callbacks.onDone(result.content);
       return result;
@@ -528,6 +610,7 @@ export class UnifiedAIService {
     });
 
     const TIMEOUT_MS = getTimeoutMs(provider);
+    const STREAM_IDLE_TIMEOUT_MS = this.getStreamIdleTimeoutMs(provider);
 
     const requestBody: any = {
       model: provider.model,
@@ -540,10 +623,45 @@ export class UnifiedAIService {
       requestBody.max_tokens = provider.maxTokens;
     }
 
+    const adminRequestId = recordModelRequest({
+      channel: 'problem_generation_stream',
+      provider,
+      requestBody,
+      messages,
+    });
+
+    let streamIdleTimedOut = false;
+    let clearStreamIdleTimer = () => {};
+    let resetStreamIdleTimer = () => {};
+
     try {
       const headers = buildAuthHeaders(provider);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      let streamIdleTimer: ReturnType<typeof setTimeout> | null = null;
+      clearStreamIdleTimer = () => {
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+          streamIdleTimer = null;
+        }
+      };
+      resetStreamIdleTimer = () => {
+        clearStreamIdleTimer();
+        if (controller.signal.aborted) {
+          return;
+        }
+        streamIdleTimer = setTimeout(() => {
+          streamIdleTimedOut = true;
+          controller.abort();
+        }, STREAM_IDLE_TIMEOUT_MS);
+      };
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          controller.abort();
+        } else {
+          abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+        }
+      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -572,6 +690,8 @@ export class UnifiedAIService {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('无法获取响应流');
 
+      resetStreamIdleTimer();
+
       const decoder = new TextDecoder();
       let fullText = '';
       let buffer = '';
@@ -581,6 +701,7 @@ export class UnifiedAIService {
       // 逐 chunk 读取 SSE 流
       while (true) {
         const { done, value } = await reader.read();
+        resetStreamIdleTimer();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -626,6 +747,8 @@ export class UnifiedAIService {
         }
       }
 
+      clearStreamIdleTimer();
+
       // 流结束时若 reasoning_content 仍未闭合，补上 </think>
       if (inReasoning) {
         fullText += '</think>\n\n';
@@ -654,21 +777,61 @@ export class UnifiedAIService {
         usage,
       });
 
+      recordModelResponse({
+        requestId: adminRequestId,
+        channel: 'problem_generation_stream',
+        provider,
+        responseBody: { content: fullText, usage, stream: true },
+        assistantContent: fullText,
+        usage,
+        latencyMs: Date.now() - startTime,
+        success: true,
+      });
+
       callbacks.onDone(fullText);
       return { content: fullText, elapsedSec };
     } catch (error: any) {
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+      let normalizedError = error;
+
+      if (error?.name === 'AbortError' && !abortSignal?.aborted && typeof error?.message === 'string' && streamIdleTimedOut) {
+        normalizedError = new Error(`流式解析在 ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)} 秒内未收到新内容，已自动中断并准备重试。`);
+        normalizedError.name = 'StreamIdleTimeoutError';
+      }
 
       endUsageRequest({
         requestId,
         success: false,
         latencyMs: Date.now() - startTime,
-        error: error?.message,
+        error: normalizedError?.message,
       });
 
-      callbacks.onError(error?.message || '流式请求失败');
+      recordModelResponse({
+        requestId: adminRequestId,
+        channel: 'problem_generation_stream',
+        provider,
+        responseBody: null,
+        latencyMs: Date.now() - startTime,
+        success: false,
+        error: normalizedError?.message || '流式模型请求失败',
+      });
+
+      callbacks.onError(normalizedError?.message || '流式请求失败');
 
       if (error.name === 'AbortError') {
+        if (abortSignal?.aborted) {
+          throw error;
+        }
+        if (streamIdleTimedOut) {
+          onLog({
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'warn',
+            message: `(${provider.name}) 流式解析长时间无输出（>${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s），已自动中断并触发上层重试。`,
+            category: 'network',
+            suggestion: '这通常是模型流式输出中断或供应商连接卡住。系统已自动重试；若频繁出现，建议增大超时或切换更稳定的模型。',
+          });
+          throw normalizedError;
+        }
         onLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'error',
@@ -676,7 +839,7 @@ export class UnifiedAIService {
           category: 'network',
         });
       }
-      throw error;
+      throw normalizedError;
     }
   }
 
@@ -692,15 +855,16 @@ export class UnifiedAIService {
      */
     onStemsReady?: (stems: MathProblem[]) => void,
     /**
-     * 流式解析回调：解析阶段每个 token 到达时触发。
-     * Why: 让解析内容像对话一样逐字流出，替代骨架屏等待。
+      * 流式解析回调：保留类型兼容，当前默认不再由题目生成流程传入。
+      * Why: 解析阶段已切换为非流式整段返回，减少状态同步复杂度。
      */
-    onExplanationStream?: (token: string) => void
+    onExplanationStream?: (token: string) => void,
+    abortSignal?: AbortSignal,
   ): Promise<MathProblem[]> {
     if (this.dualModelConfig.enabled && this.dualModelConfig.provider) {
-      return this.generateDualStage(config, onLog, existingProblems, onStemsReady, onExplanationStream);
+      return this.generateDualStage(config, onLog, existingProblems, onStemsReady, onExplanationStream, abortSignal);
     }
-    return this.generateSingleStage(config, onLog, existingProblems, onStemsReady, onExplanationStream);
+    return this.generateSingleStage(config, onLog, existingProblems, onStemsReady, onExplanationStream, abortSignal);
   }
 
   private async generateSingleStage(
@@ -708,7 +872,8 @@ export class UnifiedAIService {
     onLog: (log: LogEntry) => void,
     existingProblems: MathProblem[] = [],
     onStemsReady?: (stems: MathProblem[]) => void,
-    onExplanationStream?: (token: string) => void
+    onExplanationStream?: (token: string) => void,
+    abortSignal?: AbortSignal,
   ): Promise<MathProblem[]> {
     const { syllabus, difficulty, questionType, chapter, count } = config;
 
@@ -754,7 +919,7 @@ export class UnifiedAIService {
       { role: "user", content: this.buildStemOnlyUserPrompt(config, entropy, existingProblems) },
     ];
 
-    const { content: stemContent, elapsedSec: elapsed1 } = await this.fetchModelCompletion(this.providerConfig, stemMessages, onLog, true);
+    const { content: stemContent, elapsedSec: elapsed1 } = await this.fetchModelCompletion(this.providerConfig, stemMessages, onLog, true, abortSignal);
 
     onLog({
       timestamp: new Date().toLocaleTimeString(),
@@ -789,10 +954,9 @@ export class UnifiedAIService {
     onLog({
       timestamp: new Date().toLocaleTimeString(),
       level: 'info',
-      message: `[阶段2/2] 正在为 ${stems.length} 道题目生成答案和解析${onExplanationStream ? '（流式输出）' : ''}...`,
+      message: `[阶段2/2] 正在为 ${stems.length} 道题目生成答案和解析（非流式整段返回）...`,
     });
 
-    // 根据是否有流式回调，选择流式或非流式路径
     const explanationMessages = [
       { role: "system", content: this.buildExplanationSystemPrompt() },
       { role: "user", content: this.buildExplanationUserPrompt(stems) },
@@ -801,32 +965,10 @@ export class UnifiedAIService {
     let expText: string;
     let elapsed2: string;
 
-    if (onExplanationStream && !this.providerConfig.backendProvider) {
-      // ===== 流式路径：逐 token 输出到 UI =====
-      const result = await this.fetchStreamCompletion(
-        this.providerConfig,
-        explanationMessages,
-        {
-          onToken: (token) => onExplanationStream(token),
-          onDone: () => {},
-          onError: (err) => {
-            onLog({
-              timestamp: new Date().toLocaleTimeString(),
-              level: 'error',
-              message: `流式解析出错：${err}`,
-            });
-          },
-        },
-        onLog
-      );
-      expText = result.content;
-      elapsed2 = result.elapsedSec;
-    } else {
-      // ===== 非流式路径（网关转发或无回调）=====
-      const result = await this.fetchModelCompletion(this.providerConfig, explanationMessages, onLog, false);
-      expText = result.content;
-      elapsed2 = result.elapsedSec;
-    }
+    // ===== 非流式路径：等待完整解析后一次性回填 =====
+    const result = await this.fetchModelCompletion(this.providerConfig, explanationMessages, onLog, false, abortSignal);
+    expText = result.content;
+    elapsed2 = result.elapsedSec;
 
     onLog({
       timestamp: new Date().toLocaleTimeString(),
@@ -852,7 +994,8 @@ export class UnifiedAIService {
     onLog: (log: LogEntry) => void,
     existingProblems: MathProblem[] = [],
     onStemsReady?: (stems: MathProblem[]) => void,
-    onExplanationStream?: (token: string) => void
+    onExplanationStream?: (token: string) => void,
+    abortSignal?: AbortSignal,
   ): Promise<MathProblem[]> {
     const { syllabus, difficulty, questionType, chapter, count } = config;
     const bigModel = this.providerConfig;
@@ -884,7 +1027,7 @@ export class UnifiedAIService {
       { role: "user", content: this.buildDualStemThinkingUserPrompt(config, entropy, existingProblems) },
     ];
 
-    const { content: stemDraft, elapsedSec: elapsed1a } = await this.fetchModelCompletion(bigModel, stage1aMessages, onLog, false);
+    const { content: stemDraft, elapsedSec: elapsed1a } = await this.fetchModelCompletion(bigModel, stage1aMessages, onLog, false, abortSignal);
 
     onLog({
       timestamp: new Date().toLocaleTimeString(),
@@ -904,7 +1047,7 @@ export class UnifiedAIService {
       { role: "user", content: this.buildDualStemFormattingUserPrompt(stemDraft, count, questionType) },
     ];
 
-    const { content: stemJson, elapsedSec: elapsed1b } = await this.fetchModelCompletion(smallModel, stage1bMessages, onLog, true);
+    const { content: stemJson, elapsedSec: elapsed1b } = await this.fetchModelCompletion(smallModel, stage1bMessages, onLog, true, abortSignal);
 
     onLog({
       timestamp: new Date().toLocaleTimeString(),
@@ -944,38 +1087,16 @@ export class UnifiedAIService {
     onLog({
       timestamp: new Date().toLocaleTimeString(),
       level: 'info',
-      message: `[阶段2/3] 大模型正在为 ${stems.length} 道题目作答${onExplanationStream ? '（流式输出）' : ''}...`,
+      message: `[阶段2/3] 大模型正在为 ${stems.length} 道题目作答（非流式整段返回）...`,
     });
 
     let expText: string;
     let elapsed2: string;
 
-    if (onExplanationStream && !bigModel.backendProvider) {
-      // ===== 流式路径：逐 token 输出到 UI =====
-      const result = await this.fetchStreamCompletion(
-        bigModel,
-        explanationMessages,
-        {
-          onToken: (token) => onExplanationStream(token),
-          onDone: () => {},
-          onError: (err) => {
-            onLog({
-              timestamp: new Date().toLocaleTimeString(),
-              level: 'error',
-              message: `流式解析出错：${err}`,
-            });
-          },
-        },
-        onLog
-      );
-      expText = result.content;
-      elapsed2 = result.elapsedSec;
-    } else {
-      // ===== 非流式路径 =====
-      const result = await this.fetchModelCompletion(bigModel, explanationMessages, onLog, false);
-      expText = result.content;
-      elapsed2 = result.elapsedSec;
-    }
+    // ===== 非流式路径：等待完整解析后一次性回填 =====
+    const result = await this.fetchModelCompletion(bigModel, explanationMessages, onLog, false, abortSignal);
+    expText = result.content;
+    elapsed2 = result.elapsedSec;
 
     onLog({
       timestamp: new Date().toLocaleTimeString(),
@@ -1017,10 +1138,20 @@ export class UnifiedAIService {
    * @returns 填充了 explanation 的 MathProblem 列表
    */
   private assignRawExplanation(stems: MathProblem[], rawText: string): MathProblem[] {
+    const normalizedText = (rawText || '').trim();
+
+    if (!normalizedText) {
+      return stems.map((stem) => ({
+        ...stem,
+        answer: '',
+        explanation: '模型未返回有效解析内容，请重试或更换模型。',
+      }));
+    }
+
     return stems.map((stem) => ({
       ...stem,
       answer: '',
-      explanation: rawText,
+      explanation: normalizedText,
     }));
   }
 

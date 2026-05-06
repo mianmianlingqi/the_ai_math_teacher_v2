@@ -12,6 +12,7 @@
  *      wrongProblemStorage   错题 + 错题文件夹
  *      noteStorage           笔记 + 笔记文件夹
  *      qbankStorage          题库 + 题库文件夹
+ *      paperStorage          试卷草稿
  *      settingsStorage       AI 配置 / API Key
  *      _storageCore          常量 + 树工具（无业务依赖）
  */
@@ -30,6 +31,7 @@ import { noteStorageService } from './notes';
 import { qbankStorageService } from './qbank';
 import { settingsStorageService } from './settings';
 import { problemCacheStorageService } from './cache';
+import { paperStorageService } from './papers';
 
 export const storageService = {
   // 树工具（保持 storageService.getChildFolders() 用法兼容）
@@ -46,6 +48,9 @@ export const storageService = {
 
   // 题库
   ...qbankStorageService,
+
+  // 试卷
+  ...paperStorageService,
 
   // AI / 模型配置
   ...settingsStorageService,

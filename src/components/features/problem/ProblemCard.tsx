@@ -57,7 +57,7 @@ export const ProblemCard: React.FC<ProblemCardProps> = ({ problem, index, isSave
 
   // 判断当前是否处于流式解析中。
   // Why: answer 为空并不代表解析未完成，必须使用独立状态位避免误伤收录按钮。
-  const isExplanationPlaceholder = problem.explanation === '解析生成中...';
+  const isExplanationPlaceholder = problem.explanation === '解析生成中...' || problem.explanation === '解析生成中，请稍候...';
   const isStreaming = Boolean(problem.isExplanationStreaming);
   const isExplanationReady = !isExplanationPlaceholder && !isStreaming && problem.explanation.length > 0;
 
@@ -69,6 +69,7 @@ export const ProblemCard: React.FC<ProblemCardProps> = ({ problem, index, isSave
   // <think> 块默认折叠，用户手动点击展开/收起。
   const [showThink, setShowThink] = useState(false);
   const { thinkContent, mainContent, isThinkComplete } = parseExplanation(problem.explanation);
+  const shouldUseThinkAsExplanation = !isStreaming && isThinkComplete && !mainContent && thinkContent.length > 0;
 
   const [showErrorSelector, setShowErrorSelector] = useState(false);
   const [showBankSelector, setShowBankSelector] = useState(false);
@@ -639,7 +640,7 @@ export const ProblemCard: React.FC<ProblemCardProps> = ({ problem, index, isSave
               ) : (
                 <div className="relative z-10 max-h-[560px] overflow-y-auto pr-2 custom-scrollbar">
                   {/* <think> 思考过程折叠块 */}
-                  {thinkContent && (
+                  {thinkContent && !shouldUseThinkAsExplanation && (
                     <div className="mb-6 rounded-2xl border border-violet-100 overflow-hidden">
                       <button
                         onClick={() => setShowThink(v => !v)}
@@ -670,9 +671,14 @@ export const ProblemCard: React.FC<ProblemCardProps> = ({ problem, index, isSave
                   )}
 
                   {/* 主解答内容 */}
-                  {(mainContent || (!thinkContent && problem.explanation)) ? (
+                  {(shouldUseThinkAsExplanation || mainContent || (!thinkContent && problem.explanation)) ? (
                     <div className="text-slate-700 leading-relaxed math-font whitespace-pre-wrap text-[17px]">
-                      <span dangerouslySetInnerHTML={{ __html: renderMathContent(mainContent || problem.explanation) }} />
+                      {shouldUseThinkAsExplanation && (
+                        <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-[12px] font-bold text-amber-700">
+                          模型未单独输出最终答案，以下展示其完整思路作为解析内容。
+                        </div>
+                      )}
+                      <span dangerouslySetInnerHTML={{ __html: renderMathContent(shouldUseThinkAsExplanation ? thinkContent : (mainContent || problem.explanation)) }} />
                       {isStreaming && mainContent && (
                         <span className="inline-block w-[2px] h-[1.1em] bg-sky-500 align-middle ml-0.5 animate-pulse" />
                       )}

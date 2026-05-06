@@ -10,7 +10,9 @@ export default defineConfig(({ mode }) => {
     const localApiContext = createLocalApiContext({
       rootDir: __dirname,
       backupDir: path.resolve(__dirname, 'backup'),
+      autoSaveDir: path.resolve(__dirname, 'AutoSave'),
       backupLabel: 'backup',
+      autoSaveLabel: 'AutoSave',
       env,
       logger: console,
     });

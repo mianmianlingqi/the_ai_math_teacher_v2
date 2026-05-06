@@ -12,7 +12,7 @@ import { AIProviderConfig } from '@/types';
 
 // ===== 类型定义 =====
 
-export type AppView = 'GENERATOR' | 'WRONG_BOOK' | 'NOTEBOOK' | 'QUESTION_BANK';
+export type AppView = 'GENERATOR' | 'PAPER' | 'WRONG_BOOK' | 'NOTEBOOK' | 'QUESTION_BANK';
 
 export interface AppHeaderProps {
   // 当前视图
@@ -88,6 +88,18 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12m6-6H6" />
             </svg>
             出题
+          </button>
+
+          {/* 试卷 */}
+          <button
+            onClick={() => onViewChange('PAPER')}
+            data-help="打开试卷页面，未来可在这里生成、编辑并导出完整数学试卷。"
+            className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all duration-300 flex items-center gap-2 btn-ripple ${view === 'PAPER' ? 'bg-white text-orange-600 shadow-xl ring-1 ring-slate-100 animate-selectBounce' : 'text-slate-500 hover:text-slate-800 hover:scale-105'}`}
+          >
+            <svg className={`w-3.5 h-3.5 ${view === 'PAPER' ? 'text-orange-500' : 'text-orange-300'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0119 9.414V19a2 2 0 01-2 2z" />
+            </svg>
+            试卷
           </button>
 
           {/* 题库 */}

@@ -2,6 +2,9 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
+import { buildPaperWordBuffers } from './wordExport.mjs';
+
+const fsPromises = fs.promises;
 
 const EMPTY_USAGE_STATE = {
   sessionStartedAt: 0,
@@ -25,6 +28,10 @@ function ensureDirectory(dirPath) {
   }
 }
 
+async function ensureDirectoryAsync(dirPath) {
+  await fsPromises.mkdir(dirPath, { recursive: true });
+}
+
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -34,6 +41,15 @@ function sendJson(res, statusCode, payload) {
 function sendText(res, statusCode, content, contentType = 'text/plain; charset=utf-8') {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', contentType);
+  res.end(content);
+}
+
+function sendBinary(res, statusCode, content, contentType, headers = {}) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', contentType);
+  Object.entries(headers).forEach(([key, value]) => {
+    res.setHeader(key, value);
+  });
   res.end(content);
 }
 
@@ -56,6 +72,18 @@ async function readJsonBody(req) {
 function createTimestamp() {
   const now = new Date();
   return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+}
+
+function createReadableTimestamp() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
+}
+
+function sanitizeFilename(name) {
+  return String(name || 'AI数学老师标准试卷')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
 }
 
 function validateFilename(filename) {
@@ -83,6 +111,62 @@ function resolvePythonCandidates(rootDir, env = process.env) {
 export function resolvePythonCommand({ rootDir, env = process.env }) {
   const candidates = resolvePythonCandidates(rootDir, env);
   return candidates.find((candidate) => candidate === 'python' || fs.existsSync(candidate)) || 'python';
+}
+
+async function writeUniqueAutoSaveFile(autoSaveDir, baseName, content) {
+  let attempt = 0;
+  while (attempt < 1000) {
+    const suffix = attempt === 0 ? '' : `_${String(attempt).padStart(2, '0')}`;
+    const filename = `${baseName}${suffix}.dat`;
+    const filePath = path.join(autoSaveDir, filename);
+
+    try {
+      await fsPromises.writeFile(filePath, content, { encoding: 'utf-8', flag: 'wx' });
+      return { filename, filePath };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        throw error;
+      }
+      attempt += 1;
+    }
+  }
+
+  throw new Error('自动存档文件名生成失败：短时间内创建了过多同名存档。');
+}
+
+async function listAutoSaveFiles(autoSaveDir) {
+  await ensureDirectoryAsync(autoSaveDir);
+  const entries = await fsPromises.readdir(autoSaveDir, { withFileTypes: true });
+  const results = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.dat')) continue;
+    const filePath = path.join(autoSaveDir, entry.name);
+    const stat = await fsPromises.stat(filePath);
+    results.push({
+      name: entry.name,
+      timestamp: stat.mtimeMs,
+      size: stat.size,
+    });
+  }
+
+  results.sort((a, b) => b.timestamp - a.timestamp || a.name.localeCompare(b.name));
+  return results;
+}
+
+async function enforceAutoSaveRetention(autoSaveDir, maxCount) {
+  const validMaxCount = Math.min(100, Math.max(1, Number.parseInt(String(maxCount || 10), 10) || 10));
+  const files = await listAutoSaveFiles(autoSaveDir);
+  if (files.length <= validMaxCount) {
+    return files;
+  }
+
+  const removable = files.slice(validMaxCount);
+  for (const file of removable) {
+    await fsPromises.unlink(path.join(autoSaveDir, file.name));
+  }
+
+  return files.slice(0, validMaxCount);
 }
 
 function runProcess(command, args, options = {}) {
@@ -113,12 +197,15 @@ async function convertPdfWithMarkItDown({ pythonCommand, inputPath, outputPath }
   throw new Error('MarkItDown 不可用，请确认已安装 Python 与 markitdown[pdf]。');
 }
 
-export function createLocalApiContext({ rootDir, backupDir, env = process.env, logger = console, backupLabel }) {
+export function createLocalApiContext({ rootDir, backupDir, autoSaveDir, env = process.env, logger = console, backupLabel, autoSaveLabel }) {
   ensureDirectory(backupDir);
+  ensureDirectory(autoSaveDir);
   return {
     rootDir,
     backupDir,
+    autoSaveDir,
     backupLabel: backupLabel || backupDir,
+    autoSaveLabel: autoSaveLabel || autoSaveDir,
     logger,
     pythonCommand: resolvePythonCommand({ rootDir, env }),
     devUsageState: null,
@@ -222,6 +309,95 @@ export async function handleLocalApiRequest(req, res, context) {
     return true;
   }
 
+  if (pathname === '/api/autosave/save' && req.method === 'POST') {
+    try {
+      const payload = await readJsonBody(req);
+      if (!payload?.data || typeof payload.data !== 'object') {
+        sendJson(res, 400, { success: false, error: '缺少自动存档数据 payload' });
+        return true;
+      }
+
+      await ensureDirectoryAsync(context.autoSaveDir);
+      const timestampText = createReadableTimestamp();
+      const content = JSON.stringify(payload.data, null, 2);
+      const { filename, filePath } = await writeUniqueAutoSaveFile(context.autoSaveDir, `save_${timestampText}`, content);
+      await enforceAutoSaveRetention(context.autoSaveDir, payload.maxSaves);
+      const stat = await fsPromises.stat(filePath);
+
+      context.logger.info?.(`[localApi] 自动存档已保存到 ${filePath}`);
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          name: filename,
+          timestamp: stat.mtimeMs,
+          size: stat.size,
+          reason: payload.reason || '自动保存',
+        },
+      });
+    } catch (error) {
+      context.logger.error?.('[localApi] 自动存档失败', error);
+      sendJson(res, 500, { success: false, error: error.message || '自动存档失败' });
+    }
+    return true;
+  }
+
+  if (pathname === '/api/autosave/list' && req.method === 'GET') {
+    try {
+      const files = await listAutoSaveFiles(context.autoSaveDir);
+      sendJson(res, 200, { success: true, data: files });
+    } catch (error) {
+      context.logger.error?.('[localApi] 获取自动存档列表失败', error);
+      sendJson(res, 500, { success: false, error: error.message || '获取自动存档列表失败' });
+    }
+    return true;
+  }
+
+  if (pathname === '/api/autosave/load' && req.method === 'GET') {
+    const filename = searchParams.get('name');
+    const validation = validateFilename(filename);
+    if (!validation.valid) {
+      sendJson(res, validation.reason === 'Invalid filename' ? 403 : 400, { success: false, error: validation.reason });
+      return true;
+    }
+
+    try {
+      const filePath = path.join(context.autoSaveDir, filename);
+      if (!fs.existsSync(filePath)) {
+        sendJson(res, 404, { success: false, error: '自动存档文件不存在' });
+        return true;
+      }
+      const content = await fsPromises.readFile(filePath, 'utf-8');
+      sendText(res, 200, content, 'application/json; charset=utf-8');
+    } catch (error) {
+      context.logger.error?.('[localApi] 读取自动存档失败', error);
+      sendJson(res, 500, { success: false, error: error.message || '读取自动存档失败' });
+    }
+    return true;
+  }
+
+  if (pathname === '/api/autosave/delete' && req.method === 'DELETE') {
+    const filename = searchParams.get('name');
+    const validation = validateFilename(filename);
+    if (!validation.valid) {
+      sendJson(res, validation.reason === 'Invalid filename' ? 403 : 400, { success: false, error: validation.reason });
+      return true;
+    }
+
+    try {
+      const filePath = path.join(context.autoSaveDir, filename);
+      if (!fs.existsSync(filePath)) {
+        sendJson(res, 404, { success: false, error: '自动存档文件不存在' });
+        return true;
+      }
+      await fsPromises.unlink(filePath);
+      sendJson(res, 200, { success: true, data: true });
+    } catch (error) {
+      context.logger.error?.('[localApi] 删除自动存档失败', error);
+      sendJson(res, 500, { success: false, error: error.message || '删除自动存档失败' });
+    }
+    return true;
+  }
+
   if (pathname === '/api/delete-backup' && req.method === 'DELETE') {
     const filename = searchParams.get('filename');
     const validation = validateFilename(filename);
@@ -303,6 +479,38 @@ export async function handleLocalApiRequest(req, res, context) {
       if (outputPath) {
         fs.rmSync(outputPath, { force: true });
       }
+    }
+    return true;
+  }
+
+  if (pathname === '/api/export-paper-word' && req.method === 'POST') {
+    try {
+      const payload = await readJsonBody(req);
+      if (!payload?.paper || !Array.isArray(payload.paper.questions)) {
+        sendJson(res, 400, { success: false, error: 'Missing paper payload' });
+        return true;
+      }
+
+      const variant = payload.variant === 'answer' ? 'answer' : 'question';
+      const paper = payload.paper;
+      const title = sanitizeFilename(paper.title || 'AI数学老师标准试卷');
+      const timestamp = createTimestamp().slice(0, 8);
+      const { questionBuffer, answerBuffer } = await buildPaperWordBuffers(paper, { logger: context.logger });
+      const buffer = variant === 'answer' ? answerBuffer : questionBuffer;
+      const filename = `${title}_${timestamp}_${variant === 'answer' ? '答案解析卷' : '题目卷'}.docx`;
+
+      sendBinary(
+        res,
+        200,
+        buffer,
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        {
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        },
+      );
+    } catch (error) {
+      context.logger.error?.('[localApi] 导出 Word 失败', error);
+      sendJson(res, 500, { success: false, error: error.message || '导出 Word 失败' });
     }
     return true;
   }

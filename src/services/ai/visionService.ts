@@ -1,5 +1,7 @@
 
 import { AIProviderConfig, QBankItem, Difficulty, QuestionType, Syllabus } from '@/types';
+import { extractOpenAIUsage } from './devUsageTracker';
+import { recordModelRequest, recordModelResponse } from '../dev/adminConsoleStore';
 
 const VISION_SCAN_PROMPT = `
 请分析这张图片，识别其中的所有数学题目，并将其转换为结构化的 JSON 数据。
@@ -133,27 +135,36 @@ export async function scanImageWithVisionAPI(
 
     for (let index = 0; index < candidateModels.length; index++) {
       const model = candidateModels[index];
+      const startTime = Date.now();
+      const requestBody = {
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: VISION_SCAN_PROMPT },
+              {
+                type: 'image_url',
+                image_url: { url: imageUrl },
+              },
+            ],
+          },
+        ],
+        max_tokens: provider.maxTokens || 8192,
+        temperature: provider.temperature ?? 0.3,
+        response_format: { type: 'json_object' },
+      };
+      const activeProvider = { ...provider, model };
+      const adminRequestId = recordModelRequest({
+        channel: 'vision_scan',
+        provider: activeProvider,
+        requestBody,
+        messages: requestBody.messages,
+      });
       const response = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: VISION_SCAN_PROMPT },
-                {
-                  type: 'image_url',
-                  image_url: { url: imageUrl },
-                },
-              ],
-            },
-          ],
-          max_tokens: provider.maxTokens || 8192,
-          temperature: provider.temperature ?? 0.3,
-          response_format: { type: 'json_object' },
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -162,8 +173,26 @@ export async function scanImageWithVisionAPI(
         lastStatus = response.status;
         const canFallback = response.status === 404 && /resource_not_found_error|model/i.test(errText);
         if (canFallback && index < candidateModels.length - 1) {
+          recordModelResponse({
+            requestId: adminRequestId,
+            channel: 'vision_scan',
+            provider: activeProvider,
+            responseBody: { status: response.status, error: errText, fallback: true },
+            latencyMs: Date.now() - startTime,
+            success: false,
+            error: '视觉模型不可用，尝试自动回退。',
+          });
           continue;
         }
+        recordModelResponse({
+          requestId: adminRequestId,
+          channel: 'vision_scan',
+          provider: activeProvider,
+          responseBody: { status: response.status, error: errText },
+          latencyMs: Date.now() - startTime,
+          success: false,
+          error: `视觉识别请求失败（HTTP ${response.status}）`,
+        });
         if (response.status === 401 || response.status === 403) {
           throw new Error('视觉识别认证失败，请检查 API Key 是否有效');
         }
@@ -182,9 +211,28 @@ export async function scanImageWithVisionAPI(
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
       if (!content) {
+        recordModelResponse({
+          requestId: adminRequestId,
+          channel: 'vision_scan',
+          provider: activeProvider,
+          responseBody: data,
+          latencyMs: Date.now() - startTime,
+          success: false,
+          error: '模型未返回有效内容',
+        });
         throw new Error('模型未返回有效内容');
       }
       parsed = parseModelJson(content);
+      recordModelResponse({
+        requestId: adminRequestId,
+        channel: 'vision_scan',
+        provider: activeProvider,
+        responseBody: data,
+        assistantContent: content,
+        usage: extractOpenAIUsage(data?.usage),
+        latencyMs: Date.now() - startTime,
+        success: true,
+      });
       resolvedModel = model;
       break;
     }

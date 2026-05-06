@@ -15,22 +15,24 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Syllabus, Difficulty, QuestionType, MathProblem, GenerateConfig } from '@/types';
-import { SYLLABUS_OPTIONS, DIFFICULTY_OPTIONS, QUESTION_TYPE_OPTIONS, SYLLABUS_CHAPTERS, CHAPTER_TOPICS, DEFAULT_CONFIG } from '@/constants';
+import { AutoSaveSettings, Syllabus, Difficulty, QuestionType, MathProblem, GenerateConfig } from '@/types';
+import { DEFAULT_AUTO_SAVE_SETTINGS, SYLLABUS_OPTIONS, DIFFICULTY_OPTIONS, QUESTION_TYPE_OPTIONS, SYLLABUS_CHAPTERS, CHAPTER_TOPICS, DEFAULT_CONFIG, MAX_GENERATE_COUNT, normalizeAutoSaveSettings } from '@/constants';
 import { storageService } from '@/services/storage';
 import { autoBackupData, exportData, importFromServer, restoreByFilename } from '@/services/api/backupApi';
+import { autoSaveApi, startAutoSaveTimer } from '@/services/api/autoSaveApi';
 import { ProblemCard } from '@/components/features/problem/ProblemCard';
-import { Logger } from '@/components/features/dev/Logger';
 import { WrongProblemBook } from '@/components/features/storage/WrongProblemBook';
 import { SettingsPanel } from '@/components/features/settings/SettingsPanel';
 import { ChatPanel } from '@/components/features/chat/ChatPanel';
 import { Notebook } from '@/components/features/storage/Notebook';
 import { QuestionBank } from '@/components/features/storage/QuestionBank';
+import { PaperWorkspace } from '@/components/features/paper/PaperWorkspace';
 import { ReferenceSelector, SelectedReferences, EMPTY_REFERENCES } from '@/components/features/problem/ReferenceSelector';
 import { GeneratingCard } from '@/components/common/GeneratingCard';
 import { SuitDecorations } from '@/components/common/SuitDecorations';
 import { BackupManager } from '@/components/features/storage/BackupManager';
 import { HoverHelpOverlay } from '@/components/features/dev/HoverHelpOverlay';
+import { AdminConsole } from '@/components/features/dev/AdminConsole';
 import { AppHeader, AppView } from '@/components/layout/AppHeader';
 import { useProviderConfig } from '@/hooks/useProviderConfig';
 import { useGenerateProblems, CUSTOM_CHAPTER_KEY } from '@/hooks/useGenerateProblems';
@@ -98,16 +100,20 @@ function exportProblemsToMarkdown(problems: MathProblem[]): void {
   a.click();
   URL.revokeObjectURL(url);
 }
+
 const App: React.FC = () => {
+  const savedUiSettings = storageService.getAppUiSettings();
+
   //  视图路由 
   const [view, setView] = useState<AppView>('GENERATOR');
 
   //  出题配置 
-  const [config, setConfig] = useState<GenerateConfig>(DEFAULT_CONFIG);
-  const [customChapter, setCustomChapter] = useState('');
-  const [selectedKnowledgePoint, setSelectedKnowledgePoint] = useState('');
-  const [selectedRefs, setSelectedRefs] = useState<SelectedReferences>(EMPTY_REFERENCES);
-  const [parallelMode, setParallelMode] = useState(true);
+  const [config, setConfig] = useState<GenerateConfig>(() => ({ ...DEFAULT_CONFIG, ...(savedUiSettings.generatorConfig || {}) }));
+  const [customChapter, setCustomChapter] = useState(() => savedUiSettings.customChapter || '');
+  const [selectedKnowledgePoint, setSelectedKnowledgePoint] = useState(() => savedUiSettings.selectedKnowledgePoint || '');
+  const [selectedRefs, setSelectedRefs] = useState<SelectedReferences>(() => savedUiSettings.selectedRefs || EMPTY_REFERENCES);
+  const [parallelMode, setParallelMode] = useState(() => savedUiSettings.parallelMode ?? false);
+  const [autoSaveSettings, setAutoSaveSettings] = useState<AutoSaveSettings>(() => normalizeAutoSaveSettings(savedUiSettings.autoSaveSettings || DEFAULT_AUTO_SAVE_SETTINGS));
 
   // 浮层开关：同时只能激活一个面板，null 表示所有面板关闭
   type ModalType = 'settings' | 'backup' | 'chat' | 'dataMenu' | null;
@@ -131,16 +137,42 @@ const App: React.FC = () => {
     handleQuickModelChange, handleProviderSave, aiServiceRef,
   } = useProviderConfig();
 
-  const { problems, setProblems, logs, setLogs, loading, handleGenerate } = useGenerateProblems({
+  const { problems, setProblems, loading, progress, handleGenerate } = useGenerateProblems({
     config, customChapter, selectedKnowledgePoint, selectedRefs, aiServiceRef, parallelMode,
     resetKey,
   });
 
+  const generationProgressPercent = progress.total > 0
+    ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
+    : 0;
+
   //  副作用 
+
+  useEffect(() => {
+    storageService.saveAppUiSettings({
+      generatorConfig: config,
+      customChapter,
+      selectedKnowledgePoint,
+      selectedRefs,
+      parallelMode,
+      autoSaveSettings,
+    });
+  }, [config, customChapter, selectedKnowledgePoint, selectedRefs, parallelMode, autoSaveSettings]);
 
   // 监听 data:imported 事件，递增 resetKey 让子组件重挂载
   useEffect(() => {
-    const handleDataImported = () => setResetKey(k => k + 1);
+    const handleDataImported = () => {
+      const importedUiSettings = storageService.getAppUiSettings();
+      if (importedUiSettings.generatorConfig) {
+        setConfig({ ...DEFAULT_CONFIG, ...importedUiSettings.generatorConfig });
+      }
+      setCustomChapter(importedUiSettings.customChapter || '');
+      setSelectedKnowledgePoint(importedUiSettings.selectedKnowledgePoint || '');
+      setSelectedRefs(importedUiSettings.selectedRefs || EMPTY_REFERENCES);
+      setParallelMode(importedUiSettings.parallelMode ?? false);
+      setAutoSaveSettings(normalizeAutoSaveSettings(importedUiSettings.autoSaveSettings || DEFAULT_AUTO_SAVE_SETTINGS));
+      setResetKey(k => k + 1);
+    };
     window.addEventListener('data:imported', handleDataImported);
     return () => window.removeEventListener('data:imported', handleDataImported);
   }, []);
@@ -168,6 +200,22 @@ const App: React.FC = () => {
       window.removeEventListener(STORAGE_DATA_CHANGED_EVENT, scheduleAutoBackup);
     };
   }, []);
+
+  useEffect(() => {
+    const timer = startAutoSaveTimer({
+      getSettings: () => autoSaveSettings,
+      onError: (error) => {
+        console.error('[App] 自动保存失败', error);
+      },
+      onSuccess: (entry) => {
+        console.info(`[App] 自动保存成功：${entry.name}`);
+      },
+      notifyOnError: false,
+    });
+
+    timer.refresh();
+    return () => timer.stop();
+  }, [autoSaveSettings]);
 
   // 大纲切换时：重置为第一个合法章节，清空知识点选择
   useEffect(() => {
@@ -212,7 +260,28 @@ const App: React.FC = () => {
     setActiveModal(null);
   };
 
+  const handleCreatePaperFromGeneratedProblems = () => {
+    if (problems.length === 0) {
+      toast.error('当前还没有生成题目，无法创建试卷。');
+      return;
+    }
+
+    const syllabusLabel = config.syllabus || problems[0]?.syllabus || Syllabus.UNDERGRADUATE_TRANSITION;
+    const paperTitle = `${syllabusLabel}练习试卷`;
+    storageService.replaceActiveExamPaperWithProblems(problems, {
+      title: paperTitle,
+      syllabus: problems[0]?.syllabus || config.syllabus,
+    });
+    toast.success(`已将当前 ${problems.length} 道题创建为试卷，并同步到试卷工作台。`);
+    setView('PAPER');
+  };
+
   const isGeneratorView = view === 'GENERATOR';
+
+  const handleAutoSaveSettingsChange = (settings: AutoSaveSettings) => {
+    const normalized = autoSaveApi.saveSettings(settings);
+    setAutoSaveSettings(normalized);
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#f0f9ff] text-slate-900 selection:bg-sky-100 selection:text-sky-900">
@@ -328,9 +397,9 @@ const App: React.FC = () => {
                   )}
 
                   <div className="space-y-3">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">单次生成数量 (1-10)</label>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">单次生成数量 (1-{MAX_GENERATE_COUNT})</label>
                     <div className="relative">
-                      <input type="number" min="1" max="10" className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-[1.25rem] px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-500 focus:bg-white transition-all" value={config.count} onChange={(e) => setConfig({ ...config, count: Math.min(10, Math.max(1, parseInt(e.target.value) || 1)) })} />
+                      <input type="number" min="1" max={MAX_GENERATE_COUNT} className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-[1.25rem] px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-500 focus:bg-white transition-all" value={config.count} onChange={(e) => setConfig({ ...config, count: Math.min(MAX_GENERATE_COUNT, Math.max(1, parseInt(e.target.value) || 1)) })} />
                       <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none">
                         <span className="text-[10px] font-black text-slate-300 uppercase">题 / 次</span>
                       </div>
@@ -386,10 +455,6 @@ const App: React.FC = () => {
                   </button>
                 </div>
               </div>
-
-              <div className="flex-shrink-0">
-                <Logger logs={logs} onClear={() => setLogs([])} />
-              </div>
             </div>
           </aside>
         )}
@@ -402,8 +467,10 @@ const App: React.FC = () => {
             <div className="animate-viewSwitch" key={`notebook-${resetKey}`}><Notebook /></div>
           ) : view === 'QUESTION_BANK' ? (
             <div className="animate-viewSwitch" key={`qbank-${resetKey}`}><QuestionBank /></div>
+          ) : view === 'PAPER' ? (
+            <PaperWorkspace currentProblems={problems} onGenerateProblems={() => setView('GENERATOR')} />
           ) : (problems.length > 0 || loading) ? (
-            <div className="space-y-10 animate-fadeIn">
+            <div className="min-h-[650px] space-y-10 animate-fadeIn">
               <div className="flex items-center justify-between bg-white px-10 py-8 rounded-[3rem] border border-slate-200 shadow-sm animate-slideUp hover-float-3d relative overflow-hidden" style={{ animationDelay: '0.05s' }}>
                 <SuitDecorations variant="corner" />
                 <div className="flex items-center gap-5 relative z-[1]">
@@ -412,6 +479,12 @@ const App: React.FC = () => {
                   {loading && <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full animate-pulse flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-statusPulse"></span>生成中...</span>}
                 </div>
                 <div className="flex items-center gap-2">
+                  {!loading && problems.length > 0 && (
+                    <button onClick={handleCreatePaperFromGeneratedProblems} className="text-xs font-black text-orange-500 hover:text-orange-700 px-6 py-3 rounded-2xl hover:bg-orange-50 transition-all flex items-center gap-2 border border-transparent hover:border-orange-100 hover:scale-105 active:scale-95" title="将当前生成的题目全部放入试卷工作台">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0119 9.414V19a2 2 0 01-2 2z" /></svg>
+                      创建试卷
+                    </button>
+                  )}
                   {!loading && problems.length > 0 && (
                     <button onClick={() => exportProblemsToMarkdown(problems)} className="text-xs font-black text-sky-500 hover:text-sky-700 px-6 py-3 rounded-2xl hover:bg-sky-50 transition-all flex items-center gap-2 border border-transparent hover:border-sky-100 hover:scale-105 active:scale-95" title="导出为 Markdown 文件">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -425,6 +498,32 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="grid grid-cols-1 gap-10">
+                {loading && progress.total > 0 && (
+                  <div className="bg-white rounded-[2.5rem] border border-sky-100 px-8 py-6 shadow-sm animate-slideUp">
+                    <div className="flex items-center justify-between gap-4 mb-4">
+                      <div>
+                        <p className="text-xs font-black text-sky-500 uppercase tracking-[0.2em] mb-1">出题进度</p>
+                        <h4 className="text-lg font-black text-slate-800">
+                          已完成 {progress.completed} / {progress.total} 道
+                        </h4>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-black text-sky-600">{generationProgressPercent}%</p>
+                        <p className="text-[11px] font-bold text-slate-400">成功 {progress.success} 道</p>
+                      </div>
+                    </div>
+                    <div className="h-4 rounded-full bg-slate-100 overflow-hidden border border-slate-100">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-sky-500 via-cyan-400 to-indigo-500 transition-all duration-500"
+                        style={{ width: `${generationProgressPercent}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-slate-400">
+                      <span>{parallelMode ? '当前模式：并行生成' : '当前模式：串行生成'}</span>
+                      <span>{progress.total - progress.completed > 0 ? `剩余 ${progress.total - progress.completed} 道` : '正在收尾...'}</span>
+                    </div>
+                  </div>
+                )}
                 {problems.map((p, idx) => (
                   <div key={p.id || idx} className="animate-slideUp" style={{ animationDelay: `${idx * 0.08}s` }}>
                     <ProblemCard problem={p} index={idx} />
@@ -475,9 +574,17 @@ const App: React.FC = () => {
       </footer>
 
       {/* ===== 浮层面板 ===== */}
-      <SettingsPanel isOpen={activeModal === 'settings'} onClose={() => setActiveModal(null)} onSave={handleProviderSave} currentConfig={providerConfig} currentDualConfig={dualModelConfig} currentChatConfig={chatConfig} currentVisionConfig={visionConfig} />
+      <SettingsPanel
+        isOpen={activeModal === 'settings'}
+        onClose={() => setActiveModal(null)}
+        onSave={handleProviderSave}
+        currentConfig={providerConfig}
+        autoSaveSettings={autoSaveSettings}
+        onSaveAutoSaveSettings={handleAutoSaveSettingsChange}
+      />
       <ChatPanel isOpen={activeModal === 'chat'} onClose={() => setActiveModal(null)} currentProblems={problems} chatProvider={chatConfig.provider} visionProvider={visionConfig.provider} onOpenSettings={() => setActiveModal('settings')} />
       <BackupManager isOpen={activeModal === 'backup'} onClose={() => setActiveModal(null)} onRestore={(filename) => restoreByFilename(filename, () => setActiveModal(null))} />
+      <AdminConsole providerConfig={providerConfig} />
       <HoverHelpOverlay disabled={problems.length >= config.count && config.count > 0} />
       <ConfirmDialog />
       <Toaster position="top-center" toastOptions={{ duration: 3500, style: { borderRadius: '1rem', fontWeight: 600, maxWidth: '420px' } }} />

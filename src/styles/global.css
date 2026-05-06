@@ -43,6 +43,330 @@ body {
   background: #cbd5e1;
 }
 
+/* ===== 后台管理浮层 ===== */
+.admin-console-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 80;
+  width: 48px;
+  height: 48px;
+  border-radius: 9999px;
+  background: #333;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.26);
+  transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+  pointer-events: auto;
+}
+
+.admin-console-fab:hover {
+  transform: scale(1.08);
+  background: #252525;
+  box-shadow: 0 24px 54px rgba(15, 23, 42, 0.34);
+}
+
+.admin-console-tooltip {
+  position: absolute;
+  right: 58px;
+  top: 50%;
+  transform: translateY(-50%) translateX(6px);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  border-radius: 999px;
+  background: #111827;
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.24);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.admin-console-fab:hover .admin-console-tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.admin-console-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.admin-console-panel {
+  width: min(96vw, 1760px);
+  height: min(92vh, 1240px);
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 28px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 30px 90px rgba(15, 23, 42, 0.32);
+  pointer-events: auto;
+}
+
+.admin-console-card {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid #e2e8f0;
+  background: rgba(248, 250, 252, 0.88);
+  padding: 18px;
+}
+
+.admin-console-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+}
+
+.admin-console-top-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.1fr) minmax(360px, 0.95fr);
+  gap: 18px;
+}
+
+.admin-console-system-log {
+  min-height: 320px;
+  flex: none;
+}
+
+.admin-console-system-log-collapsed {
+  min-height: 0;
+}
+
+.admin-console-system-log-collapsed .admin-console-subtitle {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-console-card-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.admin-console-card-footer {
+  flex: none;
+}
+
+.admin-console-title {
+  font-size: 15px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.admin-console-subtitle {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.admin-console-badge {
+  flex: none;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-console-input {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.admin-console-input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.14);
+}
+
+.admin-console-virtual {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.admin-console-row {
+  margin-bottom: 12px;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 14px;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+
+.admin-console-code,
+.admin-console-token-box {
+  max-height: 112px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #dbeafe;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.admin-console-token-box {
+  max-height: 160px;
+  background: rgba(15, 23, 42, 0.92);
+}
+
+.admin-console-mini-btn,
+.admin-console-action {
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.9);
+  color: #475569;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 900;
+  transition: transform 160ms ease, background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.admin-console-mini-btn:hover:not(:disabled),
+.admin-console-action:hover {
+  transform: translateY(-1px);
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #0369a1;
+}
+
+.admin-console-mini-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.admin-console-action-primary {
+  border-color: #0284c7;
+  background: #0284c7;
+  color: #fff;
+}
+
+.admin-console-action-primary:hover {
+  border-color: #0369a1;
+  background: #0369a1;
+  color: #fff;
+}
+
+@media (max-width: 1536px) {
+  .admin-console-top-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .admin-console-card-params {
+    grid-column: 1 / -1;
+    min-height: 320px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .admin-console-panel {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+  }
+
+  .admin-console-content {
+    padding: 14px;
+    gap: 14px;
+  }
+
+  .admin-console-top-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .admin-console-card,
+  .admin-console-card-params,
+  .admin-console-system-log {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: #020617;
+  }
+
+  .admin-console-panel {
+    border-color: rgba(51, 65, 85, 0.9);
+    background: rgba(15, 23, 42, 0.96);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58);
+  }
+
+  .admin-console-card {
+    border-color: #334155;
+    background: rgba(2, 6, 23, 0.52);
+  }
+
+  .admin-console-title {
+    color: #f8fafc;
+  }
+
+  .admin-console-badge {
+    background: rgba(14, 165, 233, 0.16);
+    color: #7dd3fc;
+  }
+
+  .admin-console-input {
+    border-color: #334155;
+    background: rgba(15, 23, 42, 0.88);
+    color: #e2e8f0;
+  }
+
+  .admin-console-row {
+    border-color: #334155;
+    background: rgba(15, 23, 42, 0.8);
+  }
+
+  .admin-console-mini-btn,
+  .admin-console-action {
+    border-color: #334155;
+    background: rgba(15, 23, 42, 0.9);
+    color: #cbd5e1;
+  }
+}
+
 /* ===== 全局交互动效系统 ===== */
 
 /* 页面载入淡入 */
@@ -363,9 +687,9 @@ body {
 .stagger-7 { animation-delay: 0.35s; }
 .stagger-8 { animation-delay: 0.4s; }
 
-/* 平滑滚动 */
+/* 平滑滚动：仅保留锚点导航体验，避免动态插入大块内容时浏览器自动平滑滚动到底部 */
 html {
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 /* ===== 扑克牌花色装饰元素 ===== */

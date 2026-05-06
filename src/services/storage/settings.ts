@@ -4,9 +4,10 @@
  * 单一职责：AI 供应商配置 + 答疑对话配置 + 视觉识别配置的持久化读写。
  */
 
-import { AIProviderConfig, ChatConfig, VisionConfig } from '@/types';
+import { AIProviderConfig, AppUiSettings, AutoSaveSettings, ChatConfig, VisionConfig } from '@/types';
+import { DEFAULT_AUTO_SAVE_SETTINGS, normalizeAutoSaveSettings } from '@/constants';
 import {
-  PROVIDER_CONFIG_KEY, API_KEYS_STORAGE_KEY,
+  PROVIDER_CONFIG_KEY, API_KEYS_STORAGE_KEY, APP_UI_SETTINGS_KEY,
   DUAL_MODEL_CONFIG_KEY, CHAT_CONFIG_KEY, VISION_CONFIG_KEY,
   safeReadStorage, safeWriteStorage,
 } from './core';
@@ -74,5 +75,34 @@ export const settingsStorageService = {
       this.saveAPIKey(config.provider.id + '_vision', config.provider.apiKey);
     }
     safeWriteStorage(VISION_CONFIG_KEY, config);
+  },
+
+  // ===== 应用界面设置 =====
+
+  getAppUiSettings(): AppUiSettings {
+    const raw = safeReadStorage<AppUiSettings>(APP_UI_SETTINGS_KEY, {});
+    return {
+      ...raw,
+      autoSaveSettings: normalizeAutoSaveSettings(raw.autoSaveSettings),
+    };
+  },
+
+  saveAppUiSettings(settings: AppUiSettings) {
+    safeWriteStorage(APP_UI_SETTINGS_KEY, {
+      ...settings,
+      autoSaveSettings: normalizeAutoSaveSettings(settings.autoSaveSettings || DEFAULT_AUTO_SAVE_SETTINGS),
+    });
+  },
+
+  getAutoSaveSettings(): AutoSaveSettings {
+    return this.getAppUiSettings().autoSaveSettings || DEFAULT_AUTO_SAVE_SETTINGS;
+  },
+
+  saveAutoSaveSettings(settings: AutoSaveSettings) {
+    const current = this.getAppUiSettings();
+    this.saveAppUiSettings({
+      ...current,
+      autoSaveSettings: normalizeAutoSaveSettings(settings),
+    });
   },
 };

@@ -30,6 +30,10 @@ app/python/
 
 # Local backup files (user data, should not be committed)
 backup/
+AutoSave/
+
+# Kilo local planning artifacts
+.kilo/plans/
 
 # Vercel build cache
 .vercel/

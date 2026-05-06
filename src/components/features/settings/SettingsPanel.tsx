@@ -1,8 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { AIProviderConfig, DualModelConfig, ChatConfig, VisionConfig } from '@/types';
-import { PROVIDER_PRESETS, DEFAULT_PROVIDER_CONFIG, VISION_PROVIDER_PRESETS, DEFAULT_VISION_CONFIG } from '@/constants';
+import React, { useEffect, useState } from 'react';
+import { AIProviderConfig, AutoSaveSettings } from '@/types';
+import {
+  AUTO_SAVE_MAX_INTERVAL_SECONDS,
+  AUTO_SAVE_MAX_MAX_SAVES,
+  AUTO_SAVE_MIN_INTERVAL_SECONDS,
+  AUTO_SAVE_MIN_MAX_SAVES,
+  PROVIDER_PRESETS,
+  normalizeAutoSaveSettings,
+} from '@/constants';
 import { storageService } from '@/services/storage';
-import { SuitDecorations } from '@/components/common/SuitDecorations';
 
 const sanitizeUiError = (raw: string): string => {
   const text = String(raw || '')
@@ -16,88 +22,38 @@ const sanitizeUiError = (raw: string): string => {
 interface SettingsPanelProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (config: AIProviderConfig, dualConfig: DualModelConfig, chatConfig: ChatConfig, visionConfig: VisionConfig) => void;
+  onSave: (config: AIProviderConfig) => void;
   currentConfig: AIProviderConfig;
-  currentDualConfig: DualModelConfig;
-  currentChatConfig: ChatConfig;
-  currentVisionConfig: VisionConfig;
+  autoSaveSettings: AutoSaveSettings;
+  onSaveAutoSaveSettings: (settings: AutoSaveSettings) => void;
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, onSave, currentConfig, currentDualConfig, currentChatConfig, currentVisionConfig }) => {
-  const [activeTab, setActiveTab] = useState<'main' | 'small' | 'chat' | 'vision'>('main');
-
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, onSave, currentConfig, autoSaveSettings, onSaveAutoSaveSettings }) => {
   const [config, setConfig] = useState<AIProviderConfig>(currentConfig);
-  const [dualConfig, setDualConfig] = useState<DualModelConfig>(currentDualConfig);
-  const [chatConfig, setChatConfig] = useState<ChatConfig>(currentChatConfig);
-  const [visionConfig, setVisionConfig] = useState<VisionConfig>(currentVisionConfig);
-
-  const [customModelMain, setCustomModelMain] = useState('');
-  const [customModelSmall, setCustomModelSmall] = useState('');
-  const [customModelChat, setCustomModelChat] = useState('');
-  const [customModelVision, setCustomModelVision] = useState('');
-
+  const [localAutoSaveSettings, setLocalAutoSaveSettings] = useState<AutoSaveSettings>(normalizeAutoSaveSettings(autoSaveSettings));
+  const [customModel, setCustomModel] = useState('');
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
 
   useEffect(() => {
     setConfig(currentConfig);
-    setDualConfig(currentDualConfig);
-    setChatConfig(currentChatConfig);
-    setVisionConfig(currentVisionConfig);
-  }, [currentConfig, currentDualConfig, currentChatConfig, currentVisionConfig, isOpen]);
+    setLocalAutoSaveSettings(normalizeAutoSaveSettings(autoSaveSettings));
+    setCustomModel('');
+    setTestStatus('idle');
+    setTestMessage('');
+  }, [currentConfig, autoSaveSettings, isOpen]);
 
-  const mainConfigInvalid = !config.backendProvider && (!config.baseURL || (!config.apiKey && config.id !== 'ollama') || !config.model);
-  const smallConfigInvalid = dualConfig.enabled && !dualConfig.provider?.backendProvider && (!dualConfig.provider?.baseURL || (!dualConfig.provider?.apiKey && dualConfig.provider?.id !== 'ollama') || !dualConfig.provider?.model);
-  const isSaveDisabled = mainConfigInvalid || smallConfigInvalid;
-
-  const getMissingHint = () => {
-    const hints: string[] = [];
-    if (mainConfigInvalid) hints.push('核心思考大模型');
-    if (smallConfigInvalid) hints.push('格式化小模型');
-    return hints;
-  };
+  const configInvalid = !config.backendProvider && (!config.baseURL || (!config.apiKey && config.id !== 'ollama') || !config.model);
 
   const handleSave = () => {
-    const finalConfig = {
+    const finalConfig: AIProviderConfig = {
       ...config,
-      model: customModelMain.trim() || config.model,
+      model: customModel.trim() || config.model,
       timeout: config.timeout ?? 300,
       temperature: config.temperature ?? 1.0,
     };
-
-    let finalDualConfig = { ...dualConfig };
-    if (finalDualConfig.provider) {
-      finalDualConfig.provider = {
-        ...finalDualConfig.provider,
-        model: customModelSmall.trim() || finalDualConfig.provider.model,
-        timeout: finalDualConfig.provider.timeout ?? 300,
-        temperature: finalDualConfig.provider.temperature ?? 1.0,
-      };
-    }
-
-    const finalChatConfig: ChatConfig = {
-      provider: {
-        ...chatConfig.provider,
-        model: customModelChat.trim() || chatConfig.provider.model,
-        timeout: chatConfig.provider.timeout ?? 120,
-        temperature: chatConfig.provider.temperature ?? 0.7,
-      },
-    };
-
-    const finalVisionConfig: VisionConfig = {
-      provider: {
-        ...visionConfig.provider,
-        model: customModelVision.trim() || visionConfig.provider.model,
-        timeout: visionConfig.provider.timeout ?? 120,
-        temperature: visionConfig.provider.temperature ?? 0.3,
-      },
-    };
-
-    storageService.saveProviderConfig(finalConfig);
-    storageService.saveDualModelConfig(finalDualConfig);
-    storageService.saveChatConfig(finalChatConfig);
-    storageService.saveVisionConfig(finalVisionConfig);
-    onSave(finalConfig, finalDualConfig, finalChatConfig, finalVisionConfig);
+    onSave(finalConfig);
+    onSaveAutoSaveSettings(normalizeAutoSaveSettings(localAutoSaveSettings));
     onClose();
   };
 
@@ -117,8 +73,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
                 </svg>
               </div>
               <div>
-                <h2 className="text-xl font-black text-slate-900">AI 供应商配置</h2>
-                <p className="text-xs text-slate-400 font-bold">支持 OpenAI 兼容 API 的所有供应商</p>
+                <h2 className="text-xl font-black text-slate-900">系统设置</h2>
+                <p className="text-xs text-slate-400 font-bold">统一管理 AI 模型配置与自动存档策略</p>
               </div>
             </div>
             <button onClick={onClose} data-help="关闭设置窗口并返回主页。若已修改参数但未点“保存配置”，本次修改不会生效。" className="w-10 h-10 rounded-xl hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600">
@@ -127,129 +83,94 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
               </svg>
             </button>
           </div>
-
-          <div className="flex gap-2 mt-8 p-1 bg-slate-100/50 rounded-2xl">
-            <button
-              onClick={() => { setActiveTab('main'); setTestStatus('idle'); setTestMessage(''); }}
-              data-help="核心思考大模型：负责生成题目思路与主要内容。建议优先配置稳定、质量高的模型。"
-              className={`flex-1 py-2.5 rounded-xl text-sm font-black transition-all ${activeTab === 'main' ? 'bg-white text-sky-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                }`}
-            >
-              核心思考大模型
-            </button>
-            <button
-              onClick={() => { setActiveTab('small'); setTestStatus('idle'); setTestMessage(''); }}
-              data-help="格式化小模型：将核心模型输出转为标准 JSON。开启后可提升解析稳定性。"
-              className={`flex-1 py-2.5 rounded-xl text-sm font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'small' ? 'bg-white text-sky-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                }`}
-            >
-              格式化小模型
-              {dualConfig.enabled && <span className="w-2 h-2 rounded-full bg-emerald-400"></span>}
-            </button>
-            <button
-              onClick={() => { setActiveTab('chat'); setTestStatus('idle'); setTestMessage(''); }}
-              data-help="答疑模型：用于右下角 ai对话助手。建议选择响应快、上下文理解稳定的模型。"
-              className={`flex-1 py-2.5 rounded-xl text-sm font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'chat' ? 'bg-white text-sky-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                }`}
-            >
-              答疑模型
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
-            </button>
-            <button
-              onClick={() => { setActiveTab('vision'); setTestStatus('idle'); setTestMessage(''); }}
-              data-help="视觉识别模型：用于图片题识别与图片答疑。请优先选择支持多模态输入的模型。"
-              className={`flex-1 py-2.5 rounded-xl text-sm font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'vision' ? 'bg-white text-sky-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                }`}
-            >
-              视觉识别
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-            </button>
-          </div>
         </div>
 
         <div className="p-10 pt-4 flex-1 overflow-y-auto">
-          {activeTab === 'small' && (
-            <div className="mb-8 p-6 bg-sky-50/50 rounded-2xl border border-sky-100 flex items-center justify-between">
+          <div className="mb-6 p-5 bg-violet-50/50 rounded-2xl border border-violet-100">
+            <h3 className="font-black text-violet-900 text-sm mb-1">统一模型说明</h3>
+            <p className="text-xs text-violet-600/70 font-medium">
+              保存后，出题页、AI 对话助手和图片识别将统一使用下面这一个模型配置。
+              如果你需要使用图片识别，请优先选择支持视觉输入的模型，例如 Gemini、GPT-4o、Qwen-VL 等。
+            </p>
+          </div>
+
+          <ProviderForm
+            config={config}
+            onChange={setConfig}
+            customModel={customModel}
+            setCustomModel={setCustomModel}
+            testStatus={testStatus}
+            setTestStatus={setTestStatus}
+            testMessage={testMessage}
+            setTestMessage={setTestMessage}
+          />
+
+          <div className="mt-10 pt-8 border-t border-slate-100 space-y-6">
+            <div>
+              <h3 className="text-lg font-black text-slate-900">自动存档</h3>
+              <p className="mt-1 text-xs font-bold text-slate-400 leading-5">
+                程序会按设定间隔自动将当前工作区快照写入 AutoSave 存档目录，便于恢复历史状态。
+              </p>
+            </div>
+
+            <label className="flex items-start gap-4 rounded-2xl border border-slate-100 bg-slate-50/70 px-5 py-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={localAutoSaveSettings.enabled}
+                onChange={(e) => setLocalAutoSaveSettings(prev => ({ ...prev, enabled: e.target.checked }))}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+              />
               <div>
-                <h3 className="font-black text-sky-900 text-sm">启用双模型模式</h3>
-                <p className="text-xs text-sky-600/70 mt-1 font-medium">大模型构思题干解答，小模型负责转化为标准JSON</p>
+                <p className="text-sm font-black text-slate-800">启用自动保存</p>
+                <p className="mt-1 text-xs font-bold text-slate-400 leading-5">
+                  开启后会在后台异步运行定时器；关闭后暂停定时器，不影响手动备份与已有存档文件。
+                </p>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
+            </label>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="space-y-3">
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">最大存档数量</label>
                 <input
-                  type="checkbox"
-                  value=""
-                  className="sr-only peer"
-                  aria-label="启用双模型模式"
-                  checked={dualConfig.enabled}
+                  type="number"
+                  min={AUTO_SAVE_MIN_MAX_SAVES}
+                  max={AUTO_SAVE_MAX_MAX_SAVES}
+                  step="1"
+                  className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-4 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all"
+                  value={localAutoSaveSettings.maxSaves}
                   onChange={(e) => {
-                    setDualConfig(prev => {
-                      if (e.target.checked && !prev.provider) {
-                        return { enabled: true, provider: DEFAULT_PROVIDER_CONFIG };
-                      }
-                      return { ...prev, enabled: e.target.checked };
-                    });
+                    const next = Number.parseInt(e.target.value, 10);
+                    setLocalAutoSaveSettings(prev => ({
+                      ...prev,
+                      maxSaves: Number.isNaN(next) ? prev.maxSaves : Math.min(AUTO_SAVE_MAX_MAX_SAVES, Math.max(AUTO_SAVE_MIN_MAX_SAVES, next)),
+                    }));
                   }}
                 />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
-              </label>
-            </div>
-          )}
+                <p className="text-xs font-bold text-slate-400 px-2">默认 10，范围 {AUTO_SAVE_MIN_MAX_SAVES} - {AUTO_SAVE_MAX_MAX_SAVES}。超出上限时会自动删除最旧的存档。</p>
+              </div>
 
-          {activeTab === 'chat' && (
-            <div className="mb-6 p-5 bg-sky-50/50 rounded-2xl border border-sky-100">
-              <h3 className="font-black text-sky-900 text-sm mb-1">答疑对话模型</h3>
-              <p className="text-xs text-sky-600/70 font-medium">配置用于 ai对话助手的模型，支持流式输出实时对话。建议选用响应速度快的模型。</p>
+              <div className="space-y-3">
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">保存间隔（秒）</label>
+                <input
+                  type="number"
+                  min={AUTO_SAVE_MIN_INTERVAL_SECONDS}
+                  max={AUTO_SAVE_MAX_INTERVAL_SECONDS}
+                  step="1"
+                  className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-4 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all"
+                  value={localAutoSaveSettings.intervalSeconds}
+                  onChange={(e) => {
+                    const next = Number.parseInt(e.target.value, 10);
+                    setLocalAutoSaveSettings(prev => ({
+                      ...prev,
+                      intervalSeconds: Number.isNaN(next) ? prev.intervalSeconds : Math.min(AUTO_SAVE_MAX_INTERVAL_SECONDS, Math.max(AUTO_SAVE_MIN_INTERVAL_SECONDS, next)),
+                    }));
+                  }}
+                />
+                <p className="text-xs font-bold text-slate-400 px-2">默认 300 秒，范围 {AUTO_SAVE_MIN_INTERVAL_SECONDS} - {AUTO_SAVE_MAX_INTERVAL_SECONDS} 秒。</p>
+              </div>
             </div>
-          )}
+          </div>
 
-          {activeTab === 'vision' && (
-            <div className="mb-6 p-5 bg-violet-50/50 rounded-2xl border border-violet-100">
-              <h3 className="font-black text-violet-900 text-sm mb-1">视觉识别模型</h3>
-              <p className="text-xs text-violet-600/70 font-medium">配置用于拍照/上传识别题目的视觉模型。需要选择支持图片输入的模型（如 GPT-4o、Gemini、Qwen-VL 等）。</p>
-            </div>
-          )}
-
-          {(!dualConfig.enabled && activeTab === 'small') ? (
-            <div className="text-center py-12 text-slate-400 font-bold text-sm">
-              启用上方开关以配置格式化模型
-            </div>
-          ) : activeTab === 'chat' ? (
-            <ProviderForm
-              config={chatConfig.provider}
-              onChange={(newConf) => setChatConfig({ provider: newConf })}
-              customModel={customModelChat}
-              setCustomModel={setCustomModelChat}
-              testStatus={testStatus}
-              setTestStatus={setTestStatus}
-              testMessage={testMessage}
-              setTestMessage={setTestMessage}
-            />
-          ) : activeTab === 'vision' ? (
-            <ProviderForm
-              config={visionConfig.provider}
-              onChange={(newConf) => setVisionConfig({ provider: newConf })}
-              customModel={customModelVision}
-              setCustomModel={setCustomModelVision}
-              testStatus={testStatus}
-              setTestStatus={setTestStatus}
-              testMessage={testMessage}
-              setTestMessage={setTestMessage}
-              providerPresets={VISION_PROVIDER_PRESETS}
-            />
-          ) : (
-            <ProviderForm
-              config={activeTab === 'main' ? config : dualConfig.provider!}
-              onChange={(newConf) => activeTab === 'main' ? setConfig(newConf) : setDualConfig(prev => ({ ...prev, provider: newConf }))}
-              customModel={activeTab === 'main' ? customModelMain : customModelSmall}
-              setCustomModel={(val) => activeTab === 'main' ? setCustomModelMain(val) : setCustomModelSmall(val)}
-              testStatus={testStatus}
-              setTestStatus={setTestStatus}
-              testMessage={testMessage}
-              setTestMessage={setTestMessage}
-            />
-          )}
-
-          {/* 底部按钮 */}
           <div className="flex flex-col gap-3 pt-8 mt-8 border-t border-slate-100">
             <div className="flex gap-4">
               <button onClick={onClose} className="flex-1 py-4 rounded-2xl text-sm font-black text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all border-2 border-slate-100">
@@ -257,37 +178,27 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, o
               </button>
               <button
                 onClick={handleSave}
-                data-help="保存当前标签页及其它已修改配置。保存后会立即用于后续生成、答疑与识别请求。"
-                disabled={isSaveDisabled}
-                className={`flex-1 py-4 rounded-2xl text-sm font-black transition-all ${isSaveDisabled
-                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
-                    : 'bg-sky-600 text-white hover:bg-sky-700 shadow-xl shadow-sky-100'
-                  }`}
+                data-help="保存后，出题、答疑和视觉识别都会统一使用当前配置。"
+                disabled={configInvalid}
+                className={`flex-1 py-4 rounded-2xl text-sm font-black transition-all ${configInvalid
+                  ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                  : 'bg-sky-600 text-white hover:bg-sky-700 shadow-xl shadow-sky-100'
+                }`}
               >
-                保存配置
+                保存统一配置
               </button>
             </div>
-            {isSaveDisabled && (
+            {configInvalid && (
               <div className="flex items-center gap-2 px-1">
                 <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                 </svg>
                 <p className="text-xs text-amber-500 font-semibold">
-                  请先完善以下标签页的配置：
-                  {getMissingHint().map((tab, i) => (
-                    <button
-                      key={tab}
-                      onClick={() => setActiveTab(tab === '核心思考大模型' ? 'main' : 'small')}
-                      className="ml-1 underline underline-offset-2 text-sky-500 hover:text-sky-700 font-black"
-                    >
-                      {tab}{i < getMissingHint().length - 1 ? '、' : ''}
-                    </button>
-                  ))}
+                  请完善统一模型的 Base URL、API Key 与模型名称后再保存。
                 </p>
               </div>
             )}
           </div>
-
         </div>
       </div>
     </div>
@@ -372,7 +283,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
           headers,
           body: JSON.stringify({
             model,
-            messages: [{ role: "user", content: "请回复：连接成功" }],
+            messages: [{ role: 'user', content: '请回复：连接成功' }],
             max_tokens: 20,
           }),
         });
@@ -420,10 +331,6 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
 
   return (
     <div className="space-y-8 animate-fadeIn mt-2">
-
-      {/* ===== 配置区 ===== */}
-      <>
-      {/* 供应商选择 */}
       <div className="space-y-3">
         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">选择供应商</label>
         <div className="grid grid-cols-3 gap-2">
@@ -433,9 +340,9 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
               onClick={() => handlePresetChange(preset.id)}
               data-help={`切换到 ${preset.name} 供应商预设。将自动填充推荐 Base URL 与默认模型。`}
               className={`px-4 py-3 rounded-2xl text-xs font-bold transition-all border-2 text-left ${config.id === preset.id
-                  ? 'bg-sky-50 border-sky-300 text-sky-700'
-                  : 'bg-slate-50/50 border-slate-100 text-slate-600 hover:border-slate-200 hover:bg-white'
-                }`}
+                ? 'bg-sky-50 border-sky-300 text-sky-700'
+                : 'bg-slate-50/50 border-slate-100 text-slate-600 hover:border-slate-200 hover:bg-white'
+              }`}
             >
               {preset.name}
             </button>
@@ -443,12 +350,11 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
         </div>
       </div>
 
-      {/* API 地址 */}
       <div className="space-y-3">
         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">API 基础地址 (Base URL)</label>
         <input
           type="text"
-          data-help="填写 OpenAI 兼容接口地址（通常以 /v1 结尾）。用于所有聊天请求的基础入口。"
+          data-help="填写 OpenAI 兼容接口地址（通常以 /v1 结尾）。统一用于出题、答疑与视觉识别。"
           className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all font-mono"
           placeholder="https://api.example.com/v1"
           value={config.baseURL}
@@ -456,7 +362,6 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
         />
       </div>
 
-      {/* API Key */}
       <div className="space-y-3">
         <div className="flex items-center justify-between ml-2 mr-2">
           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">API Key</label>
@@ -473,8 +378,8 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
         </div>
         <div className="relative">
           <input
-            type={showApiKey ? "text" : "password"}
-            data-help="填写 API Key。若使用本地 Ollama 可留空。建议按模型用途分别测试连接。"
+            type={showApiKey ? 'text' : 'password'}
+            data-help="填写统一 API Key。若使用本地 Ollama 可留空。"
             className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-6 py-4 pr-24 text-sm font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all font-mono"
             placeholder={config.id === 'ollama' ? '本地模型无需 Key（留空即可）' : '输入你的 API Key...'}
             value={config.apiKey}
@@ -482,7 +387,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
           />
           <button
             onClick={() => setShowApiKey(!showApiKey)}
-            data-help="切换 API Key 显示/隐藏状态，仅影响本地输入框展示，不会影响保存内容。"
+            data-help="切换 API Key 显示/隐藏状态，仅影响本地输入框展示。"
             className="absolute right-4 top-1/2 -translate-y-1/2 px-3 py-1.5 text-[10px] font-black text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all"
           >
             {showApiKey ? '隐藏' : '显示'}
@@ -490,7 +395,6 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
         </div>
       </div>
 
-      {/* 模型选择 */}
       <div className="space-y-3">
         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">模型名称</label>
         {currentPreset && currentPreset.models.length > 0 && (
@@ -501,9 +405,9 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
                 onClick={() => handleModelSelect(model)}
                 data-help={`使用推荐模型：${model}。若不在列表中，可在下方输入自定义模型名。`}
                 className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all border ${config.model === model && !customModel
-                    ? 'bg-sky-100 border-sky-300 text-sky-700'
-                    : 'bg-slate-50 border-slate-100 text-slate-500 hover:border-slate-200'
-                  }`}
+                  ? 'bg-sky-100 border-sky-300 text-sky-700'
+                  : 'bg-slate-50 border-slate-100 text-slate-500 hover:border-slate-200'
+                }`}
               >
                 {model}
               </button>
@@ -512,7 +416,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
         )}
         <input
           type="text"
-          data-help="可手动输入模型名称（覆盖上方选择）。例如供应商新模型或私有部署模型。"
+          data-help="可手动输入模型名称（覆盖上方选择）。统一用于出题、答疑和图片识别。"
           className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-2xl px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-400 focus:bg-white transition-all font-mono"
           placeholder="输入或选择模型名称..."
           value={customModel || config.model}
@@ -524,15 +428,13 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
           }}
         />
       </div>
-      </>
 
-      {/* 高级参数 */}
       <div className="grid grid-cols-3 gap-4">
         <div className="space-y-3">
           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">温度 (Temp)</label>
           <input
             type="number"
-            data-help="温度控制回答发散度。越低越稳定，越高越灵活；出题场景建议 0.7~1.0。"
+            data-help="温度控制统一模型回答发散度。越低越稳定，越高越灵活。"
             min="0"
             max="2"
             step="0.1"
@@ -581,20 +483,19 @@ const ProviderForm: React.FC<ProviderFormProps> = ({ config, onChange, customMod
         </div>
       </div>
 
-      {/* 测试连接 */}
       <div className="space-y-3">
         <button
           onClick={handleTest}
-          data-help="发送一条最小测试请求验证：Base URL、Key 与模型名称是否可用。失败时请先检查模型名与权限。"
+          data-help="发送一条最小测试请求验证：Base URL、Key 与模型名称是否可用。"
           disabled={testStatus === 'testing'}
           className={`w-full py-4 rounded-2xl text-sm font-black transition-all border-2 flex items-center justify-center gap-2 ${testStatus === 'testing'
-              ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-wait'
-              : testStatus === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
-                : testStatus === 'error'
-                  ? 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
-                  : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300'
-            }`}
+            ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-wait'
+            : testStatus === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
+              : testStatus === 'error'
+                ? 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
+                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300'
+          }`}
         >
           {testStatus === 'testing' ? (
             <>

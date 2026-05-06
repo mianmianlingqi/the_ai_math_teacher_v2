@@ -220,6 +220,44 @@ export interface QBankItem {
   updatedAt: number;
 }
 
+// ===== 试卷系统 =====
+
+export type ExamPaperSource = 'manual' | 'ai' | 'mixed';
+export type ExamPaperItemSource = 'ai' | 'qbank' | 'wrong_book' | 'manual' | 'current_problem';
+
+export interface ExamPaperItem {
+  id: string;
+  order: number;
+  score: number;
+  source: ExamPaperItemSource;
+  sourceId?: string;
+  question: string;
+  options: string[];
+  answer: string;
+  explanation: string;
+  difficulty?: Difficulty;
+  syllabus?: Syllabus;
+  questionType?: QuestionType;
+  images?: string[];
+}
+
+export interface ExamPaper {
+  id: string;
+  title: string;
+  syllabus: Syllabus;
+  totalQuestions: number;
+  totalScore: number;
+  questions: ExamPaperItem[];
+  createdAt: number;
+  updatedAt: number;
+  source: ExamPaperSource;
+}
+
+export interface PaperExportOptions {
+  includeStudentInfo: boolean;
+  includeScore: boolean;
+}
+
 // ===== 参考资料选择（跨模块共享类型）=====
 
 /** 用户在出题时选中的参考资料集合 */
@@ -235,3 +273,22 @@ export const EMPTY_REFERENCES: SelectedReferences = {
   noteIds: [],
   qbankIds: [],
 };
+
+// ===== 应用界面状态持久化 =====
+
+export interface AppUiSettings {
+  generatorConfig?: GenerateConfig;
+  customChapter?: string;
+  selectedKnowledgePoint?: string;
+  selectedRefs?: SelectedReferences;
+  parallelMode?: boolean;
+  autoSaveSettings?: AutoSaveSettings;
+}
+
+// ===== 自动存档设置 =====
+
+export interface AutoSaveSettings {
+  enabled: boolean;
+  maxSaves: number;
+  intervalSeconds: number;
+}

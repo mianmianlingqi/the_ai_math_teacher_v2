@@ -42,7 +42,9 @@ export async function startLocalServer({ appRoot, userDataDir, logger = console 
   const apiContext = createLocalApiContext({
     rootDir: appRoot,
     backupDir: path.join(userDataDir, 'backup'),
+    autoSaveDir: path.join(userDataDir, 'AutoSave'),
     backupLabel: '桌面应用数据目录/backup',
+    autoSaveLabel: '桌面应用数据目录/AutoSave',
     logger,
   });
 

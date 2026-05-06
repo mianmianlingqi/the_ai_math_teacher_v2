@@ -10,10 +10,22 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AIProviderConfig, ChatConfig, DualModelConfig, VisionConfig } from '@/types';
-import { DEFAULT_PROVIDER_CONFIG, DEFAULT_VISION_CONFIG } from '@/constants';
+import { DEFAULT_PROVIDER_CONFIG } from '@/constants';
 import { storageService } from '@/services/storage';
 import { UnifiedAIService } from '@/services/ai/aiService';
 import { aiApi, isBackendEnabled } from '@/services/api/backendApi';
+
+function buildUnifiedChatConfig(config: AIProviderConfig): ChatConfig {
+  return { provider: { ...config } };
+}
+
+function buildUnifiedVisionConfig(config: AIProviderConfig): VisionConfig {
+  return { provider: { ...config } };
+}
+
+function buildDisabledDualConfig(): DualModelConfig {
+  return { enabled: false, provider: null };
+}
 
 // ===== 类型定义 =====
 
@@ -50,12 +62,7 @@ export interface UseProviderConfigResult {
    * 保存来自 SettingsPanel 的全量配置更新。
    * Why: SettingsPanel 一次性修改 4 个配置，集中写入确保原子性。
    */
-  handleProviderSave: (
-    newConfig: AIProviderConfig,
-    newDualConfig: DualModelConfig,
-    newChatConfig: ChatConfig,
-    newVisionConfig: VisionConfig
-  ) => void;
+  handleProviderSave: (newConfig: AIProviderConfig) => void;
 
   /** AI 服务实例 ref——配置变更时 useEffect 在内部同步更新，无需外部感知 */
   aiServiceRef: React.MutableRefObject<UnifiedAIService>;
@@ -81,19 +88,11 @@ export function useProviderConfig(): UseProviderConfigResult {
     };
   });
 
-  const [dualModelConfig, setDualModelConfig] = useState<DualModelConfig>(
-    () => storageService.getDualModelConfig()
-  );
+  const [dualModelConfig, setDualModelConfig] = useState<DualModelConfig>(buildDisabledDualConfig);
 
-  const [chatConfig, setChatConfig] = useState<ChatConfig>(() => {
-    const saved = storageService.getChatConfig();
-    return saved || { provider: { ...DEFAULT_PROVIDER_CONFIG, apiKey: '', temperature: 0.7 } };
-  });
+  const [chatConfig, setChatConfig] = useState<ChatConfig>(() => buildUnifiedChatConfig(providerConfig));
 
-  const [visionConfig, setVisionConfig] = useState<VisionConfig>(() => {
-    const saved = storageService.getVisionConfig();
-    return saved || { provider: { ...DEFAULT_VISION_CONFIG } };
-  });
+  const [visionConfig, setVisionConfig] = useState<VisionConfig>(() => buildUnifiedVisionConfig(providerConfig));
 
   const [backendProviders, setBackendProviders] = useState<BackendProvider[]>([]);
 
@@ -103,6 +102,8 @@ export function useProviderConfig(): UseProviderConfigResult {
   // 3. 配置变更时同步更新服务实例
   useEffect(() => {
     aiServiceRef.current.updateConfig(providerConfig, dualModelConfig);
+    setChatConfig(buildUnifiedChatConfig(providerConfig));
+    setVisionConfig(buildUnifiedVisionConfig(providerConfig));
   }, [providerConfig, dualModelConfig]);
 
   // 4. 数据导入后重新加载配置
@@ -117,16 +118,9 @@ export function useProviderConfig(): UseProviderConfigResult {
         });
       }
 
-      const savedDual = storageService.getDualModelConfig();
-      if (savedDual) {
-        setDualModelConfig(savedDual);
-      }
-
-      const savedChat = storageService.getChatConfig();
-      setChatConfig(savedChat || { provider: { ...DEFAULT_PROVIDER_CONFIG, apiKey: '', temperature: 0.7 } });
-
-      const savedVision = storageService.getVisionConfig();
-      setVisionConfig(savedVision || { provider: { ...DEFAULT_VISION_CONFIG } });
+      setDualModelConfig(buildDisabledDualConfig());
+      setChatConfig(buildUnifiedChatConfig(savedProvider || DEFAULT_PROVIDER_CONFIG));
+      setVisionConfig(buildUnifiedVisionConfig(savedProvider || DEFAULT_PROVIDER_CONFIG));
     };
 
     window.addEventListener('data:imported', handleDataImported);
@@ -156,7 +150,13 @@ export function useProviderConfig(): UseProviderConfigResult {
           apiKey: '',
         };
         setProviderConfig(newConfig);
+        setDualModelConfig(buildDisabledDualConfig());
+        setChatConfig(buildUnifiedChatConfig(newConfig));
+        setVisionConfig(buildUnifiedVisionConfig(newConfig));
         storageService.saveProviderConfig(newConfig);
+        storageService.saveDualModelConfig(buildDisabledDualConfig());
+        storageService.saveChatConfig(buildUnifiedChatConfig(newConfig));
+        storageService.saveVisionConfig(buildUnifiedVisionConfig(newConfig));
       }
     }).catch(() => {
       // 本地网关不可用时静默失败，用户仍可使用自定义 Key
@@ -185,24 +185,34 @@ export function useProviderConfig(): UseProviderConfigResult {
       apiKey: '', // 本地网关模式无需暴露 Key
     };
     setProviderConfig(newConfig);
+    setDualModelConfig(buildDisabledDualConfig());
+    setChatConfig(buildUnifiedChatConfig(newConfig));
+    setVisionConfig(buildUnifiedVisionConfig(newConfig));
     storageService.saveProviderConfig(newConfig);
+    storageService.saveDualModelConfig(buildDisabledDualConfig());
+    storageService.saveChatConfig(buildUnifiedChatConfig(newConfig));
+    storageService.saveVisionConfig(buildUnifiedVisionConfig(newConfig));
   };
 
   // 6. 来自 SettingsPanel 的批量保存（4 配置原子写入）
-  const handleProviderSave = (
-    newConfig: AIProviderConfig,
-    newDualConfig: DualModelConfig,
-    newChatConfig: ChatConfig,
-    newVisionConfig: VisionConfig
-  ) => {
-    setProviderConfig(newConfig);
-    setDualModelConfig(newDualConfig);
-    setChatConfig(newChatConfig);
-    setVisionConfig(newVisionConfig);
-    storageService.saveProviderConfig(newConfig);
-    storageService.saveDualModelConfig(newDualConfig);
-    storageService.saveChatConfig(newChatConfig);
-    storageService.saveVisionConfig(newVisionConfig);
+  const handleProviderSave = (newConfig: AIProviderConfig) => {
+    const normalizedConfig: AIProviderConfig = {
+      ...newConfig,
+      timeout: newConfig.timeout ?? 300,
+      temperature: newConfig.temperature ?? 1.0,
+    };
+    const disabledDualConfig = buildDisabledDualConfig();
+    const unifiedChatConfig = buildUnifiedChatConfig(normalizedConfig);
+    const unifiedVisionConfig = buildUnifiedVisionConfig(normalizedConfig);
+
+    setProviderConfig(normalizedConfig);
+    setDualModelConfig(disabledDualConfig);
+    setChatConfig(unifiedChatConfig);
+    setVisionConfig(unifiedVisionConfig);
+    storageService.saveProviderConfig(normalizedConfig);
+    storageService.saveDualModelConfig(disabledDualConfig);
+    storageService.saveChatConfig(unifiedChatConfig);
+    storageService.saveVisionConfig(unifiedVisionConfig);
   };
 
   // 7. 派生值：当前快速选择器显示值

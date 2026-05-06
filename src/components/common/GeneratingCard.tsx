@@ -7,7 +7,7 @@ import { SuitDecorations } from '@/components/common/SuitDecorations';
  */
 export const GeneratingCard: React.FC = () => {
   return (
-    <div className="relative overflow-hidden bg-white rounded-[2.5rem] border border-indigo-100 p-10 shadow-lg shadow-indigo-50/50 animate-fadeIn hover-float-3d">
+    <div className="relative overflow-hidden bg-white rounded-[2.5rem] border border-indigo-100 p-10 shadow-lg shadow-indigo-50/50">
       <SuitDecorations variant="full" />
       {/* 顶部流光动画条 */}
       <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-400 via-sky-400 to-violet-400 bg-[length:200%_100%] animate-shimmer rounded-t-[2.5rem]" />

@@ -7,6 +7,9 @@
 
 import { Syllabus, Difficulty, QuestionType } from '@/types';
 
+/** 单次出题允许的最大数量。 */
+export const MAX_GENERATE_COUNT = 50;
+
 export const SYLLABUS_OPTIONS = [
   { value: Syllabus.POSTGRADUATE, label: '考研数学' },
   { value: Syllabus.UNDERGRADUATE_TRANSITION, label: '专升本数学' },
@@ -34,7 +37,7 @@ export const DEFAULT_CONFIG = {
   questionType: QuestionType.CALCULATION,
   chapter: '一元函数微分学',
   topic: '',
-  count: 5,
+  count: 10,
 };
 
 export const CHAT_PANEL = {

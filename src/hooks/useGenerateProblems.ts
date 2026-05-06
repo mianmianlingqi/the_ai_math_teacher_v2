@@ -17,6 +17,7 @@ import { SelectedReferences } from '@/types';
 import { buildReferenceContext } from '@/services/ai/promptBuilder';
 import { SYLLABUS_CHAPTERS } from '@/constants';
 import { wakeUpBackend, isBackendEnabled } from '@/services/api/backendApi';
+import { recordRuntimeLog, recordRuntimeStatus, recordSystemLogSnapshot } from '@/services/dev/adminConsoleStore';
 
 // ===== 常量 =====
 
@@ -25,6 +26,9 @@ export const CUSTOM_CHAPTER_KEY = '自定义其他';
 
 /** 单题最大重试次数 */
 const MAX_RETRIES = 2;
+
+/** 单次生成任务允许的最大补位调度倍数，防止在模型持续异常时无限补发 */
+const MAX_SUPPLEMENT_MULTIPLIER = 5;
 
 // ===== 类型定义 =====
 
@@ -50,6 +54,11 @@ export interface UseGenerateProblemsResult {
   setLogs: React.Dispatch<React.SetStateAction<LogEntry[]>>;
   addLog: (log: LogEntry) => void;
   loading: boolean;
+  progress: {
+    completed: number;
+    success: number;
+    total: number;
+  };
   handleGenerate: () => Promise<void>;
 }
 
@@ -65,18 +74,39 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
   const { config, customChapter, selectedKnowledgePoint, selectedRefs, aiServiceRef, parallelMode, resetKey } = options;
 
   const [problems, setProblems] = useState<MathProblem[]>(() => storageService.getLastProblems());
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logs, setLogsState] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState({ completed: 0, success: 0, total: 0 });
+  const generationRunIdRef = useRef(0);
+  const generationAbortRef = useRef<AbortController | null>(null);
+
+  const setLogs: React.Dispatch<React.SetStateAction<LogEntry[]>> = useCallback((updater) => {
+    setLogsState(prev => {
+      const next = typeof updater === 'function'
+        ? (updater as (value: LogEntry[]) => LogEntry[])(prev)
+        : updater;
+      recordSystemLogSnapshot(next);
+      return next;
+    });
+  }, []);
 
   const addLog = useCallback((log: LogEntry) => {
     setLogs(prev => [...prev, log]);
-  }, []);
+    // setLogs 已把左下角系统日志快照同步到后台面板；这里仅补充 IO 状态流，避免系统日志重复写入。
+    recordRuntimeLog(log, undefined, { syncSystemLog: false });
+  }, [setLogs]);
 
   // 当 data:imported 事件触发后，App 层递增 resetKey，此处重新从 storage 同步题目
   useEffect(() => {
     if (resetKey === undefined || resetKey === 0) return;
     setProblems(storageService.getLastProblems());
   }, [resetKey]);
+
+  useEffect(() => {
+    return () => {
+      generationAbortRef.current?.abort();
+    };
+  }, []);
 
   /**
    * 触发题目生成。
@@ -89,9 +119,22 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
    * 5. 全部完成后写入 storageService 持久化
    */
   const handleGenerate = async () => {
+    generationAbortRef.current?.abort();
+    const generationController = new AbortController();
+    generationAbortRef.current = generationController;
+    const currentRunId = ++generationRunIdRef.current;
+
     setLoading(true);
     setProblems([]);
     storageService.clearLastProblems();
+    setProgress({ completed: 0, success: 0, total: config.count });
+    recordRuntimeStatus('生成任务已启动', {
+      config,
+      customChapter,
+      selectedKnowledgePoint,
+      parallelMode,
+      selectedRefs,
+    });
 
     // Why: try/finally 确保无论成功、中途抛出还是网络失败，loading 状态都能归零，
     //      避免界面永久卡在「生成中」。
@@ -124,9 +167,73 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
     }
 
     const totalCount = config.count;
-    let completedCount = 0;
+    const maxDispatchCount = Math.max(totalCount, totalCount * MAX_SUPPLEMENT_MULTIPLIER);
     let successCount = 0;
+    let failedDispatchCount = 0;
+    let dispatchedCount = 0;
     let generationTargetReached = false;
+
+    const isCurrentRunActive = () => generationRunIdRef.current === currentRunId;
+    const shouldStopGeneration = () => (
+      generationTargetReached
+      || successCount >= totalCount
+      || generationController.signal.aborted
+      || !isCurrentRunActive()
+    );
+    const getRemainingSlots = () => Math.max(0, totalCount - successCount);
+    const normalizeVisibleProblems = (items: MathProblem[]) => {
+      const deduped: MathProblem[] = [];
+      const seenIds = new Set<string>();
+
+      for (const item of items) {
+        if (!item?.id || seenIds.has(item.id)) {
+          continue;
+        }
+        seenIds.add(item.id);
+        deduped.push(item);
+        if (deduped.length >= totalCount) {
+          break;
+        }
+      }
+
+      return deduped;
+    };
+    const updateProblemsState = (
+      updater: (prev: MathProblem[]) => MathProblem[],
+      options?: {
+        persist?: boolean;
+        runtimeStatus?: string;
+        runtimePayload?: Record<string, unknown>;
+      },
+    ) => {
+      setProblems(prev => {
+        if (!isCurrentRunActive()) {
+          return prev;
+        }
+
+        const next = normalizeVisibleProblems(updater(prev));
+        if (options?.persist) {
+          storageService.saveLastProblems(next);
+        }
+        if (options?.runtimeStatus) {
+          recordRuntimeStatus(options.runtimeStatus, options.runtimePayload);
+        }
+        return next;
+      });
+    };
+    const getVisibleCompletedCount = () => Math.min(successCount, totalCount);
+
+    const syncProgress = () => {
+      setProgress({ completed: getVisibleCompletedCount(), success: successCount, total: totalCount });
+      recordRuntimeStatus('生成进度更新', {
+        completed: getVisibleCompletedCount(),
+        success: successCount,
+        total: totalCount,
+        failedDispatchCount,
+        dispatchedCount,
+        maxDispatchCount,
+      });
+    };
 
     // 批次内已接受题目的共享池，用于并行模式的跨请求去重
     const acceptedProblemsInBatch: MathProblem[] = [];
@@ -134,12 +241,24 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
     const markGenerationTargetReached = () => {
       if (generationTargetReached || successCount < totalCount) return;
       generationTargetReached = true;
+      if (!generationController.signal.aborted) {
+        generationController.abort();
+      }
       setLoading(false);
+      syncProgress();
       addLog({
         timestamp: new Date().toLocaleTimeString(),
         level: 'info',
         message: `已达到目标数量 ${totalCount} 道，停止展示后续“构思中”占位并收敛生成状态。`,
       });
+    };
+    const takeNextDispatchIndex = () => {
+      if (shouldStopGeneration() || dispatchedCount >= maxDispatchCount) {
+        return null;
+      }
+      const nextIndex = dispatchedCount;
+      dispatchedCount += 1;
+      return nextIndex;
     };
 
     addLog({
@@ -194,7 +313,7 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
       index: number,
       existingProblems: MathProblem[] = []
     ): Promise<MathProblem[]> => {
-      if (generationTargetReached || successCount >= totalCount) {
+      if (shouldStopGeneration()) {
         return [];
       }
 
@@ -212,46 +331,33 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
       let earlyShownStemIds: string[] = [];
 
       const onStemsReady = (stems: MathProblem[]) => {
-        if (generationTargetReached || successCount >= totalCount) {
+        if (shouldStopGeneration()) {
           return;
         }
-        earlyShownStemIds = stems.map(s => s.id);
-        setProblems(prev => [
+        const visibleStems = stems.slice(0, Math.min(stems.length, getRemainingSlots(), singleConfig.count));
+        if (visibleStems.length === 0) {
+          return;
+        }
+        earlyShownStemIds = visibleStems.map(s => s.id);
+        recordRuntimeStatus('题干已生成，正在进入解析阶段', {
+          index: index + 1,
+          stems: visibleStems.map(stem => ({ id: stem.id, question: stem.question, options: stem.options })),
+        });
+        updateProblemsState(prev => [
           ...prev,
-          ...stems.map(s => ({
+          ...visibleStems.map(s => ({
             ...s,
             answer: '',
-            explanation: '解析生成中...',
-            isExplanationStreaming: true,
+            explanation: '解析生成中，请稍候...',
+            isExplanationStreaming: false,
           })),
         ]);
       };
 
-      /**
-       * 流式解析回调：每个 token 到达时更新对应题目的 explanation 字段。
-       *
-       * Why: 解析阶段流式输出替代骨架屏，用户实时看到推导过程逐字展现。
-       *      采用累积拼接策略，每次 token 到达追加到 streamBuffer，
-       *      再将 buffer 内容写入所有已展示题干的 explanation 中。
-       */
-      let streamBuffer = '';
-
-      const onExplanationStream = (token: string) => {
-        streamBuffer += token;
-        const currentBuffer = streamBuffer;
-        setProblems(prev =>
-          prev.map(p =>
-            earlyShownStemIds.includes(p.id)
-              ? { ...p, explanation: currentBuffer, isExplanationStreaming: true }
-              : p
-          )
-        );
-      };
-
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (generationTargetReached || successCount >= totalCount) {
+        if (shouldStopGeneration()) {
           if (earlyShownStemIds.length > 0) {
-            setProblems(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
+            updateProblemsState(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
             earlyShownStemIds = [];
           }
           return [];
@@ -261,27 +367,25 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
           // 合并串行已有+批次接受，构建完整比对池
           const comparisonPool = [...existingProblems, ...acceptedProblemsInBatch];
 
-          // 每次重试重置流式缓冲区
-          streamBuffer = '';
-
           const rawResult = await aiServiceRef.current.generateProblems(
             singleConfig,
             addLog,
             comparisonPool,
             onStemsReady,
-            onExplanationStream
+            undefined,
+            generationController.signal,
           );
 
-          if (generationTargetReached || successCount >= totalCount) {
+          if (shouldStopGeneration()) {
             if (earlyShownStemIds.length > 0) {
-              setProblems(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
+              updateProblemsState(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
               earlyShownStemIds = [];
             }
             return [];
           }
 
           // 模型偶尔会返回多道，截断只取 1 道
-          const result = rawResult.slice(0, 1);
+          const result = rawResult.slice(0, Math.min(rawResult.length, getRemainingSlots(), 1));
 
           const filtered = result.filter(problem => {
             const diversityCheck = checkProblemNearDuplicate(
@@ -310,48 +414,61 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
           if (completedProblems.length === 0) {
             // 去重失败：移除已提前展示的題干占位
             if (earlyShownStemIds.length > 0) {
-              setProblems(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
+              updateProblemsState(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
               earlyShownStemIds = [];
             }
             throw new Error('生成结果与已有题目过于相似，已触发自动重试。');
           }
 
-          completedCount++;
           successCount++;
           acceptedProblemsInBatch.push(...completedProblems);
+          syncProgress();
           markGenerationTargetReached();
 
           // 用含解析的完整题目替换占位；若题干未提前展示（如网络失败重试后成功），则直接追加
-          setProblems(prev => {
+          updateProblemsState(prev => {
             let updated: MathProblem[];
             if (earlyShownStemIds.length > 0) {
-              // 替换占位：按 id 查找并更新
-              updated = prev.map(p => {
-                const full = completedProblems.find(f => f.id === p.id);
-                return full ?? p;
-              });
+              // 替换占位：仅保留本次真正完成的题目，移除同批次多余占位，避免页面残留“解析生成中”假卡住。
+              const completedProblemMap = new Map<string, MathProblem>(
+                completedProblems.map((problem): [string, MathProblem] => [problem.id, problem])
+              );
+              updated = prev
+                .map((p): MathProblem => completedProblemMap.get(p.id) ?? p)
+                .filter(p => !earlyShownStemIds.includes(p.id) || completedProblemMap.has(p.id));
             } else {
               updated = [...prev, ...completedProblems];
             }
-            storageService.saveLastProblems(updated);
             return updated;
+          }, {
+            persist: true,
+            runtimeStatus: '完整题目已写入页面状态',
+            runtimePayload: {
+              index: index + 1,
+              completedProblems,
+              total_visible_problems: Math.min(successCount, totalCount),
+            },
           });
 
           addLog({
             timestamp: new Date().toLocaleTimeString(),
             level: 'success',
-            message: `[进度 ${completedCount}/${totalCount}] 第 ${index + 1} 号题目已生成${attempt > 0 ? `（第 ${attempt + 1} 次尝试）` : ''}。`,
+            message: `[进度 ${Math.min(successCount, totalCount)}/${totalCount}] 第 ${index + 1} 号生成任务已产出题目${attempt > 0 ? `（第 ${attempt + 1} 次尝试）` : ''}。`,
           });
 
           return completedProblems;
         } catch (error: any) {
           // 本次 attempt 失败：若题干已提前展示，先从 UI 移除占位，然后重试
           if (earlyShownStemIds.length > 0) {
-            setProblems(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
+            updateProblemsState(prev => prev.filter(p => !earlyShownStemIds.includes(p.id)));
             earlyShownStemIds = [];
           }
+          const isAbortError = error?.name === 'AbortError';
+          if (isAbortError && shouldStopGeneration()) {
+            return [];
+          }
           if (attempt < MAX_RETRIES) {
-            if (generationTargetReached || successCount >= totalCount) {
+            if (shouldStopGeneration()) {
               return [];
             }
             // Railway 后端休眠恢复需要 10-30 秒，Failed to fetch 时等待更长再重试。
@@ -369,11 +486,12 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
               await new Promise(r => setTimeout(r, 8000));
             }
           } else {
-            completedCount++;
+            failedDispatchCount++;
+            syncProgress();
             addLog({
               timestamp: new Date().toLocaleTimeString(),
-              level: 'error',
-              message: `[进度 ${completedCount}/${totalCount}] 第 ${index + 1} 号题目经 ${MAX_RETRIES + 1} 次尝试仍失败，已跳过。`,
+              level: 'warn',
+              message: `[当前成功 ${successCount}/${totalCount}] 第 ${index + 1} 号生成任务经 ${MAX_RETRIES + 1} 次尝试仍失败，将自动补发新任务继续凑满数量。`,
               details: error.message,
             });
           }
@@ -384,30 +502,62 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
 
     // 3. 并行模式：所有请求同时发出，先完成先追加
     if (parallelMode) {
-      const promises = Array.from({ length: totalCount }, (_, i) => generateOne(i));
-      await Promise.allSettled(promises);
+      const workerCount = Math.min(totalCount, maxDispatchCount);
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (!shouldStopGeneration()) {
+          const dispatchIndex = takeNextDispatchIndex();
+          if (dispatchIndex === null) {
+            break;
+          }
+          await generateOne(dispatchIndex);
+        }
+      });
+      await Promise.allSettled(workers);
     } else {
       // 串行模式：逐题生成，将已有题目传入下一次请求做去重
       const allGenerated: MathProblem[] = [];
-      for (let i = 0; i < totalCount; i++) {
-        if (generationTargetReached || successCount >= totalCount) {
+      while (!shouldStopGeneration()) {
+        const dispatchIndex = takeNextDispatchIndex();
+        if (dispatchIndex === null) {
           break;
         }
         addLog({
           timestamp: new Date().toLocaleTimeString(),
           level: 'info',
-          message: `[进度 ${i + 1}/${totalCount}] 正在生成第 ${i + 1} 道题目...`,
+          message: dispatchIndex < totalCount
+            ? `[进度 ${Math.min(successCount, totalCount)}/${totalCount}] 正在生成第 ${dispatchIndex + 1} 道题目...`
+            : `[补位 ${dispatchIndex - totalCount + 1}] 前面有题目失败，正在继续补生成以凑满 ${totalCount} 道...`,
         });
-        const result = await generateOne(i, allGenerated);
+        const result = await generateOne(dispatchIndex, allGenerated);
         allGenerated.push(...result);
       }
     }
 
+    if (!generationTargetReached && successCount < totalCount && dispatchedCount >= maxDispatchCount) {
+      addLog({
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'warn',
+        message: `已达到补位上限：共调度 ${dispatchedCount} 次，当前成功 ${successCount}/${totalCount} 道。为避免无限生成，任务已停止。`,
+        details: `补位上限系数=${MAX_SUPPLEMENT_MULTIPLIER}，失败调度=${failedDispatchCount}。`,
+      });
+    }
+
     addLog({
       timestamp: new Date().toLocaleTimeString(),
-      level: 'success',
-      message: `全部完成：共成功生成 ${successCount}/${totalCount} 道题目。`,
+      level: successCount === totalCount ? 'success' : 'warn',
+      message: successCount === totalCount
+        ? `全部完成：已严格生成 ${successCount}/${totalCount} 道题目，并在达到目标后立即停止。`
+        : `生成结束：共成功生成 ${successCount}/${totalCount} 道题目。`,
     });
+    recordRuntimeStatus('生成任务已结束', {
+      success: successCount,
+      total: totalCount,
+      failedDispatchCount,
+      dispatchedCount,
+      maxDispatchCount,
+      acceptedProblemsInBatch,
+    });
+    syncProgress();
 
     } catch (err: any) {
       // 捕获 generateOne 之外的意外抛出（理论上极罕见）
@@ -418,9 +568,18 @@ export function useGenerateProblems(options: UseGenerateProblemsOptions): UseGen
         category: 'error',
       });
     } finally {
+      if (generationAbortRef.current === generationController) {
+        generationAbortRef.current = null;
+      }
+      setProgress(prev => ({
+        completed: prev.total > 0 ? prev.completed : 0,
+        success: prev.total > 0 ? prev.success : 0,
+        total: prev.total > 0 ? prev.total : config.count,
+      }));
       setLoading(false);
+      recordRuntimeStatus('生成任务 loading 状态已关闭');
     }
   };
 
-  return { problems, setProblems, logs, setLogs, addLog, loading, handleGenerate };
+  return { problems, setProblems, logs, setLogs, addLog, loading, progress, handleGenerate };
 }

@@ -18,12 +18,13 @@ import {
   STORAGE_KEY, CUSTOM_ERRORS_KEY, API_KEYS_STORAGE_KEY,
   PROVIDER_CONFIG_KEY, DUAL_MODEL_CONFIG_KEY, CHAT_CONFIG_KEY, VISION_CONFIG_KEY,
   NOTE_FOLDERS_KEY, NOTES_KEY, QBANK_FOLDERS_KEY, QBANK_ITEMS_KEY,
-  LAST_PROBLEMS_KEY, FOLDERS_KEY,
+  LAST_PROBLEMS_KEY, FOLDERS_KEY, EXAM_PAPERS_KEY, ACTIVE_EXAM_PAPER_KEY, APP_UI_SETTINGS_KEY,
   normalizeFolderCollection, normalizeCustomErrors, safeReadStorage, safeRemoveStorage, safeWriteStorage,
 } from './core';
 import { wrongProblemStorageService } from './wrongProblem';
 import { noteStorageService } from './notes';
 import { qbankStorageService } from './qbank';
+import { paperStorageService } from './papers';
 import { settingsStorageService } from './settings';
 
 // ===== AIProviderConfig 字段补全工具函数 =====
@@ -90,13 +91,16 @@ export const problemCacheStorageService = {
       dualModelConfig: settingsStorageService.getDualModelConfig(),
       chatConfig: settingsStorageService.getChatConfig(),
       visionConfig: settingsStorageService.getVisionConfig(),
+      appUiSettings: settingsStorageService.getAppUiSettings(),
       noteFolders: noteStorageService.getNoteFolders(),
       notes: noteStorageService.getNotes(),
       qbankFolders: qbankStorageService.getQBankFolders(),
       qbankItems: qbankStorageService.getQBankItems(),
+      examPapers: paperStorageService.getExamPapers(),
+      activeExamPaperId: safeReadStorage<string | null>(ACTIVE_EXAM_PAPER_KEY, null),
       lastProblems: this.getLastProblems(),
       exportedAt: new Date().toISOString(),
-      version: '4.2',
+      version: '4.4',
     };
     return JSON.stringify(data, null, 2);
   },
@@ -201,12 +205,17 @@ export const problemCacheStorageService = {
         safeWriteStorage(VISION_CONFIG_KEY, normalizedVisionConfig);
       }
 
-      // 10. 导入笔记文件夹（可选）
+      // 10. 导入应用界面设置（可选）
+      if (data.appUiSettings && typeof data.appUiSettings === 'object') {
+        safeWriteStorage(APP_UI_SETTINGS_KEY, data.appUiSettings);
+      }
+
+      // 11. 导入笔记文件夹（可选）
       if (Array.isArray(data.noteFolders)) {
         safeWriteStorage(NOTE_FOLDERS_KEY, normalizedNoteFolders);
       }
 
-      // 11. 导入笔记条目（可选）
+      // 12. 导入笔记条目（可选）
       if (Array.isArray(data.notes)) {
         const notes = data.notes.map((n: { folderId?: string; tags?: unknown; images?: unknown } & Record<string, unknown>) => ({
           ...n,
@@ -219,12 +228,12 @@ export const problemCacheStorageService = {
         importCount += notes.length;
       }
 
-      // 12. 导入题库文件夹（可选）
+      // 13. 导入题库文件夹（可选）
       if (Array.isArray(data.qbankFolders)) {
         safeWriteStorage(QBANK_FOLDERS_KEY, normalizedQBankFolders);
       }
 
-      // 13. 导入题库条目（可选）
+      // 14. 导入题库条目（可选）
       if (Array.isArray(data.qbankItems)) {
         const qbankItems = data.qbankItems.map((q: { folderId?: string; tags?: unknown; images?: unknown; options?: unknown } & Record<string, unknown>) => ({
           ...q,
@@ -238,7 +247,25 @@ export const problemCacheStorageService = {
         importCount += qbankItems.length;
       }
 
-      // 14. 导入最近一次生成题目缓存（可选）
+      // 15. 导入试卷草稿（可选）
+      if (Array.isArray(data.examPapers)) {
+        const examPapers = paperStorageService.normalizeExamPapers(data.examPapers);
+        safeWriteStorage(EXAM_PAPERS_KEY, examPapers);
+        if (
+          typeof data.activeExamPaperId === 'string' &&
+          examPapers.some(paper => paper.id === data.activeExamPaperId)
+        ) {
+          safeWriteStorage(ACTIVE_EXAM_PAPER_KEY, data.activeExamPaperId);
+        } else if (examPapers[0]) {
+          safeWriteStorage(ACTIVE_EXAM_PAPER_KEY, examPapers[0].id);
+        } else {
+          safeRemoveStorage(ACTIVE_EXAM_PAPER_KEY);
+        }
+        types.push('试卷');
+        importCount += examPapers.length;
+      }
+
+      // 16. 导入最近一次生成题目缓存（可选）
       if (Array.isArray(data.lastProblems)) {
         safeWriteStorage(LAST_PROBLEMS_KEY, data.lastProblems);
       } else {

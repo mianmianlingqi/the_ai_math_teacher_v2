@@ -13,3 +13,4 @@
 export * from './uiOptions';
 export * from './curriculum';
 export * from './providers';
+export * from './autoSave';

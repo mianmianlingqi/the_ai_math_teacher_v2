@@ -342,9 +342,16 @@ export const aiApi = {
   },
 
   /** 通过本地网关发起非流式 AI 请求（返回 OpenAI 格式的 data） */
-  async chat(providerId: string, model: string, messages: any[], options?: { temperature?: number; max_tokens?: number }): Promise<any> {
+  async chat(
+    providerId: string,
+    model: string,
+    messages: any[],
+    options?: { temperature?: number; max_tokens?: number },
+    signal?: AbortSignal,
+  ): Promise<any> {
     const res = await apiFetch('/api/ai/chat', {
       method: 'POST',
+      signal,
       body: JSON.stringify({ provider: providerId, model, messages, ...options }),
     });
     if (!res?.success) throw new Error(res?.error || 'AI 请求失败');
