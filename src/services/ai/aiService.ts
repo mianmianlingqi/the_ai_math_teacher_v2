@@ -3,21 +3,12 @@ import { endUsageRequest, extractOpenAIUsage, startUsageRequest, estimateTokensF
 import { aiApi, tokenStore, BACKEND_BASE_URL } from "../api/backendApi";
 import { isReasoningModel, normalizeBaseURL, buildAuthHeaders, getTimeoutMs, getHttpErrorInfo } from "./httpClient";
 import { recordModelRequest, recordModelResponse } from "../dev/adminConsoleStore";
-
-/**
- * 流式解析回调：每个 token 到达时通知调用方更新 UI。
- *
- * Why: 解析阶段改为 SSE 流式输出后，逐 token 回传给 Hook 层，
- *      Hook 实时更新对应题目的 explanation 字段，ProblemCard 即时渲染。
- */
-export interface ExplanationStreamCallbacks {
-  /** 流式 token 到达 */
-  onToken: (token: string) => void;
-  /** 流式完成 */
-  onDone: (fullText: string) => void;
-  /** 流式错误 */
-  onError: (error: string) => void;
-}
+import { parseWithRetry } from "./jsonParser";
+import {
+  buildStemSystemPrompt, buildStemUserPrompt,
+  buildExplanationSystemPrompt, buildExplanationUserPrompt,
+  getQuestionTypeConstraintBlock, getDifficultyGuidance,
+} from "./prompts";
 
 /**
  * 通用 AI 服务 - 基于 OpenAI 兼容 API 格式
@@ -143,12 +134,12 @@ export class UnifiedAIService {
       `为 [${syllabus}] 学生出 ${count} 道 [${chapter}] 章节的 [${questionType}] 题干（只需题干，不需要答案和解析），确保每道题风格各异。`,
       "",
       "=== 题型门禁（必须最先满足）===",
-      ...this.getQuestionTypeConstraintBlock(questionType),
+      ...getQuestionTypeConstraintBlock(questionType),
       "",
       "=== 出题参数 ===",
       `章节：${chapter}`,
       `题型：${questionType}`,
-      `难度：${difficulty}（${this.getDifficultyGuidance(difficulty)}）`,
+      `难度：${difficulty}（${getDifficultyGuidance(difficulty)}）`,
       `额外要求：${topic || "综合考察章节核心内容，兼顾基本公式和综合应用"}`,
       `随机种子：${entropy}`,
     ];
@@ -260,12 +251,12 @@ export class UnifiedAIService {
       `为 [${syllabus}] 学生构思 ${count} 道 [${chapter}] 章节的 [${questionType}] 题干（只需题目内容和选项，不需要答案和解析）。`,
       "",
       "=== 题型门禁（必须最先满足）===",
-      ...this.getQuestionTypeConstraintBlock(questionType),
+      ...getQuestionTypeConstraintBlock(questionType),
       "",
       "=== 出题参数 ===",
       `章节：${chapter}`,
       `题型：${questionType}`,
-      `难度：${difficulty}（${this.getDifficultyGuidance(difficulty)}）`,
+      `难度：${difficulty}（${getDifficultyGuidance(difficulty)}）`,
       `额外要求：${topic || "综合考察章节核心内容，兼顾基本公式和综合应用"}`,
       `随机种子：${entropy}`,
     ];
@@ -311,7 +302,7 @@ export class UnifiedAIService {
     return [
       `请从以下数学题目草稿中提取所有题干，目标数量为 ${count} 道。`,
       "先执行题型门禁，若冲突必须重写再输出。",
-      ...this.getQuestionTypeConstraintBlock(questionType),
+      ...getQuestionTypeConstraintBlock(questionType),
       `只输出包含 id、question、options 的 JSON 数组（不含 answer 和 explanation）。`,
       questionType === QuestionType.CHOICE
         ? "题型必须为选择题：每道题 options 必须是 4 项。"
@@ -915,8 +906,8 @@ export class UnifiedAIService {
     });
 
     const stemMessages = [
-      { role: "system", content: this.buildStemOnlySystemPrompt() },
-      { role: "user", content: this.buildStemOnlyUserPrompt(config, entropy, existingProblems) },
+      { role: "system", content: buildStemSystemPrompt() },
+      { role: "user", content: buildStemUserPrompt(config, entropy, existingProblems) },
     ];
 
     const { content: stemContent, elapsedSec: elapsed1 } = await this.fetchModelCompletion(this.providerConfig, stemMessages, onLog, true, abortSignal);
@@ -927,7 +918,7 @@ export class UnifiedAIService {
       message: `[阶段1/2] 题干生成完成（耗时 ${elapsed1}s，${stemContent.length} 字符），正在解析...`,
     });
 
-    const parsedStems = this.parseWithRetry(stemContent, onLog);
+    const parsedStems = parseWithRetry(stemContent, onLog);
     const mappedStems = this.mapToMathProblems(parsedStems, config, difficulty, questionType);
     const stems = this.enforceQuestionTypeForStems(mappedStems, questionType, onLog);
 
@@ -958,8 +949,8 @@ export class UnifiedAIService {
     });
 
     const explanationMessages = [
-      { role: "system", content: this.buildExplanationSystemPrompt() },
-      { role: "user", content: this.buildExplanationUserPrompt(stems) },
+      { role: "system", content: buildExplanationSystemPrompt() },
+      { role: "user", content: buildExplanationUserPrompt(stems) },
     ];
 
     let expText: string;
@@ -1055,7 +1046,7 @@ export class UnifiedAIService {
       message: `[阶段1b/4] 题干格式化完成（耗时 ${elapsed1b}s）。`,
     });
 
-    const parsedStems = this.parseWithRetry(stemJson, onLog);
+    const parsedStems = parseWithRetry(stemJson, onLog);
     const mappedStems = this.mapToMathProblems(parsedStems, config, difficulty, questionType);
     const stems = this.enforceQuestionTypeForStems(mappedStems, questionType, onLog);
 
@@ -1080,8 +1071,8 @@ export class UnifiedAIService {
 
     // ===== 阶段2/3：大模型为题干作答 =====
     const explanationMessages = [
-      { role: "system", content: this.buildExplanationSystemPrompt() },
-      { role: "user", content: this.buildExplanationUserPrompt(stems) },
+      { role: "system", content: buildExplanationSystemPrompt() },
+      { role: "user", content: buildExplanationUserPrompt(stems) },
     ];
 
     onLog({
@@ -1587,7 +1578,7 @@ export class UnifiedAIService {
         return [];
       }
 
-      const parsed = this.parseWithRetry(content, onLog);
+      const parsed = parseWithRetry(content, onLog);
       const problemsArray: any[] = Array.isArray(parsed) ? parsed : [];
 
       const now = Date.now();
