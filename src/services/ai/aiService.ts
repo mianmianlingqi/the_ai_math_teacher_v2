@@ -296,147 +296,158 @@ export class UnifiedAIService {
 
 
 
-  // ====== 核心生成逻辑 ======
+  // ====== v2.0 核心生成方法 ======
 
-  async generateProblems(
+  /**
+   * 生成题干（带 Tool-Calling 支持）。
+   *
+   * @param config          - 出题配置
+   * @param systemPrompt    - 系统提示词（已由编排层预先构建）
+   * @param existingContext - 已有题目上下文段落（用于避免重复）
+   * @param tools           - 工具定义数组（如 retract_problem）
+   * @returns 解析后的题目数组 + 可选的工具调用信息
+   */
+  async generateStemsWithTools(
     config: GenerateConfig,
-    onLog: (log: LogEntry) => void,
-    existingProblems: MathProblem[] = [],
-    /**
-     * 题干生成完毕时的回调（在解析生成之前触发）。
-     * Why: 让 UI 能在解析阶段开始前立即显示题目内容，提升感知速度。
-     */
-    onStemsReady?: (stems: MathProblem[]) => void,
-    /**
-      * 流式解析回调：保留类型兼容，当前默认不再由题目生成流程传入。
-      * Why: 解析阶段已切换为非流式整段返回，减少状态同步复杂度。
-     */
-    onExplanationStream?: (token: string) => void,
-    abortSignal?: AbortSignal,
-  ): Promise<MathProblem[]> {
-    return this.generateSingleStage(config, onLog, existingProblems, onStemsReady, onExplanationStream, abortSignal);
-  }
-
-  private async generateSingleStage(
-    config: GenerateConfig,
-    onLog: (log: LogEntry) => void,
-    existingProblems: MathProblem[] = [],
-    onStemsReady?: (stems: MathProblem[]) => void,
-    onExplanationStream?: (token: string) => void,
-    abortSignal?: AbortSignal,
-  ): Promise<MathProblem[]> {
-    const { syllabus, difficulty, questionType, chapter, count } = config;
-
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'info',
-      message: `正在为 [${syllabus}] 的 [${chapter}] 章节生成 [${count}道] 多样化 [${questionType}]（两阶段）...`,
-    });
-
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'info',
-      message: `使用单模型（两阶段）: ${this.providerConfig.name} | ${this.providerConfig.model}`,
-    });
-
-    if (config.referenceContext) {
-      onLog({
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'info',
-        message: `已注入参考资料（${config.referenceContext.length} 字符），将针对性出题`,
-      });
-    }
-
-    if (isReasoningModel(this.providerConfig.model)) {
-      onLog({
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'warn',
-        message: `检测到推理模型，两阶段各可能需要较长时间，请耐心等待...`,
-      });
-    }
-
+    systemPrompt: string,
+    existingContext: string,
+    tools?: any[],
+  ): Promise<{ problems: MathProblem[]; toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }> }> {
+    const { difficulty, questionType } = config;
     const entropy = (Math.random() * 1e7).toFixed(0) + "_" + Date.now();
 
-    // ===== 阶段1/2：生成题干 =====
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'info',
-      message: `[阶段1/2] 正在生成题干...`,
-    });
-
-    const stemMessages = [
-      { role: "system", content: buildStemSystemPrompt() },
-      { role: "user", content: buildStemUserPrompt(config, entropy, existingProblems) },
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user" as const, content: buildStemUserPrompt(config, entropy, []) + (existingContext ? "\n\n" + existingContext : "") },
     ];
 
-    const { content: stemContent, elapsedSec: elapsed1 } = await this.fetchModelCompletion(this.providerConfig, stemMessages, onLog, true, abortSignal);
+    // 扩展 fetchModelCompletion 以支持 tools（通过请求体传入）
+    const requestBody: any = {
+      model: this.providerConfig.model,
+      messages,
+      temperature: isReasoningModel(this.providerConfig.model) ? undefined : (this.providerConfig.temperature ?? 1.0),
+    };
 
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'success',
-      message: `[阶段1/2] 题干生成完成（耗时 ${elapsed1}s，${stemContent.length} 字符），正在解析...`,
-    });
-
-    const parsedStems = parseWithRetry(stemContent, onLog);
-    const mappedStems = this.mapToMathProblems(parsedStems, config, difficulty, questionType);
-    const stems = this.enforceQuestionTypeForStems(mappedStems, questionType, onLog);
-
-    if (stems.length === 0) {
-      onLog({
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'error',
-        message: `[阶段1/2] 题干解析失败（共 0 道），无法继续生成解析。建议减少单次出题数量后重试。`,
-        category: 'parse',
-      });
-      throw new Error('题干解析失败：未解析到有效题干。Hint: 请减少单次数量或更换模型后重试。');
+    if (tools && tools.length > 0) {
+      requestBody.tools = tools;
     }
 
-    // 题干生成完毕，立即通知 UI 显示
-    onStemsReady?.(stems);
+    // 推理模式
+    const reasoningConfig = (config as any).reasoning;
+    if (reasoningConfig?.mode === 'enabled') {
+      requestBody.thinking = { type: 'enabled', budget_tokens: reasoningConfig.budget || 4096 };
+    }
 
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'info',
-      message: `成功解析 ${stems.length} 道题干，即将生成解析...`,
-    });
+    const raw = await this.fetchWithRequestBody(requestBody, true);
 
-    // ===== 阶段2/2：生成解析 =====
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'info',
-      message: `[阶段2/2] 正在为 ${stems.length} 道题目生成答案和解析（非流式整段返回）...`,
-    });
+    // 检查 tool_calls
+    const choice = raw.choices?.[0];
+    const toolCalls = choice?.message?.tool_calls?.map((tc: any) => ({
+      name: tc.function?.name || '',
+      arguments: tc.function?.arguments ? (typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments) : {},
+    }));
 
-    const explanationMessages = [
-      { role: "system", content: buildExplanationSystemPrompt() },
-      { role: "user", content: buildExplanationUserPrompt(stems) },
+    const content = choice?.message?.content || '';
+    const parsedStems = parseWithRetry(content);
+    const mappedStems = this.mapToMathProblems(parsedStems, config, difficulty, questionType);
+
+    return { problems: mappedStems, toolCalls };
+  }
+
+  /**
+   * 为单道题干生成答案和解析。
+   *
+   * @param stem - 题干（MathProblem 骨架，不含解析）
+   * @returns 解析文本
+   */
+  async generateExplanation(stem: MathProblem): Promise<string> {
+    const messages = [
+      { role: "system" as const, content: buildExplanationSystemPrompt() },
+      { role: "user" as const, content: buildExplanationUserPrompt([stem]) },
     ];
 
-    let expText: string;
-    let elapsed2: string;
+    const requestBody: any = {
+      model: this.providerConfig.model,
+      messages,
+      temperature: isReasoningModel(this.providerConfig.model) ? undefined : (this.providerConfig.temperature ?? 1.0),
+    };
 
-    // ===== 非流式路径：等待完整解析后一次性回填 =====
-    const result = await this.fetchModelCompletion(this.providerConfig, explanationMessages, onLog, false, abortSignal);
-    expText = result.content;
-    elapsed2 = result.elapsedSec;
+    const raw = await this.fetchWithRequestBody(requestBody, false);
+    return raw.choices?.[0]?.message?.content || '';
+  }
 
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'debug',
-      message: `[阶段2/2] 解析完成（耗时 ${elapsed2}s，${expText.length} 字符）。`,
-    });
+  /**
+   * 构建推理参数（供外部使用）。
+   */
+  buildThinkingParam(reasoningConfig?: { mode: string; budget?: number }): object | undefined {
+    if (!reasoningConfig || reasoningConfig.mode !== 'enabled') return undefined;
+    return { type: 'enabled', budget_tokens: reasoningConfig.budget || 4096 };
+  }
 
-    // 纯作答模式：模型输出原文直接作为解析内容，不再提取结构化数据
-    const problems = this.assignRawExplanation(stems, expText);
+  /**
+   * 底层请求封装——发送完整 requestBody 并处理响应。
+   * 从 fetchModelCompletion 抽离的公共逻辑。
+   */
+  private async fetchWithRequestBody(requestBody: any, isJsonMode: boolean): Promise<any> {
+    // 本地网关转发模式
+    if (this.providerConfig.backendProvider) {
+      try {
+        const data = await aiApi.chat(
+          this.providerConfig.backendProvider,
+          this.providerConfig.model,
+          requestBody.messages,
+          {
+            temperature: requestBody.temperature,
+            max_tokens: requestBody.max_tokens,
+          },
+        );
+        return data;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') throw err;
+        throw new Error(`本地网关请求失败：${err.message}`);
+      }
+    }
 
-    const totalElapsed = (parseFloat(elapsed1) + parseFloat(elapsed2)).toFixed(1);
-    onLog({
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'success',
-      message: `生成成功：两阶段共产出 ${problems.length} 道高质量题目（总耗时 ${totalElapsed}s）。`,
-    });
+    // 直连模式
+    const baseURL = normalizeBaseURL(this.providerConfig.baseURL);
+    const url = `${baseURL}/chat/completions`;
+    const TIMEOUT_MS = getTimeoutMs(this.providerConfig);
 
-    return problems;
+    if (isJsonMode && !isReasoningModel(this.providerConfig.model)) {
+      requestBody.response_format = { type: "json_object" };
+    }
+
+    if (this.providerConfig.maxTokens && !requestBody.max_tokens) {
+      requestBody.max_tokens = this.providerConfig.maxTokens;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    try {
+      const headers = buildAuthHeaders(this.providerConfig);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        await response.text();
+        throw new Error(`模型请求失败 (HTTP ${response.status})`);
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`模型请求超时 (${TIMEOUT_MS / 1000}s)`);
+      }
+      throw error;
+    }
   }
 
 

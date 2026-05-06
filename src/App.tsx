@@ -112,7 +112,6 @@ const App: React.FC = () => {
   const [customChapter, setCustomChapter] = useState(() => savedUiSettings.customChapter || '');
   const [selectedKnowledgePoint, setSelectedKnowledgePoint] = useState(() => savedUiSettings.selectedKnowledgePoint || '');
   const [selectedRefs, setSelectedRefs] = useState<SelectedReferences>(() => savedUiSettings.selectedRefs || EMPTY_REFERENCES);
-  const [parallelMode, setParallelMode] = useState(() => savedUiSettings.parallelMode ?? false);
   const [autoSaveSettings, setAutoSaveSettings] = useState<AutoSaveSettings>(() => normalizeAutoSaveSettings(savedUiSettings.autoSaveSettings || DEFAULT_AUTO_SAVE_SETTINGS));
 
   // 浮层开关：同时只能激活一个面板，null 表示所有面板关闭
@@ -138,7 +137,7 @@ const App: React.FC = () => {
   } = useProviderConfig();
 
   const { problems, setProblems, loading, progress, handleGenerate } = useGenerateProblems({
-    config, customChapter, selectedKnowledgePoint, selectedRefs, aiServiceRef, parallelMode,
+    config, customChapter, selectedKnowledgePoint, selectedRefs, aiServiceRef,
     resetKey,
   });
 
@@ -154,10 +153,9 @@ const App: React.FC = () => {
       customChapter,
       selectedKnowledgePoint,
       selectedRefs,
-      parallelMode,
       autoSaveSettings,
     });
-  }, [config, customChapter, selectedKnowledgePoint, selectedRefs, parallelMode, autoSaveSettings]);
+  }, [config, customChapter, selectedKnowledgePoint, selectedRefs, autoSaveSettings]);
 
   // 监听 data:imported 事件，递增 resetKey 让子组件重挂载
   useEffect(() => {
@@ -169,7 +167,6 @@ const App: React.FC = () => {
       setCustomChapter(importedUiSettings.customChapter || '');
       setSelectedKnowledgePoint(importedUiSettings.selectedKnowledgePoint || '');
       setSelectedRefs(importedUiSettings.selectedRefs || EMPTY_REFERENCES);
-      setParallelMode(importedUiSettings.parallelMode ?? false);
       setAutoSaveSettings(normalizeAutoSaveSettings(importedUiSettings.autoSaveSettings || DEFAULT_AUTO_SAVE_SETTINGS));
       setResetKey(k => k + 1);
     };
@@ -399,23 +396,11 @@ const App: React.FC = () => {
                   <div className="space-y-3">
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2">单次生成数量 (1-{MAX_GENERATE_COUNT})</label>
                     <div className="relative">
-                      <input type="number" min="1" max={MAX_GENERATE_COUNT} className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-[1.25rem] px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-500 focus:bg-white transition-all" value={config.count} onChange={(e) => setConfig({ ...config, count: Math.min(MAX_GENERATE_COUNT, Math.max(1, parseInt(e.target.value) || 1)) })} />
+                    <input type="number" min="1" max={MAX_GENERATE_COUNT} className="w-full bg-slate-50/50 border-2 border-slate-100 rounded-[1.25rem] px-6 py-4 text-sm font-bold text-slate-700 outline-none focus:border-sky-500 focus:bg-white transition-all" value={config.count} onChange={(e) => setConfig({ ...config, count: Math.min(MAX_GENERATE_COUNT, Math.max(1, parseInt(e.target.value) || 1)) })} />
                       <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none">
                         <span className="text-[10px] font-black text-slate-300 uppercase">题 / 次</span>
                       </div>
                     </div>
-                    {config.count > 1 && (
-                      <div className="flex items-center justify-between bg-slate-50/50 rounded-2xl px-4 py-3 border border-slate-100 animate-fadeIn">
-                        <div className="flex items-center gap-2">
-                          <svg className={`w-3.5 h-3.5 ${parallelMode ? 'text-sky-500' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                          <span className="text-[11px] font-bold text-slate-600">并行生成</span>
-                          <span className="text-[10px] text-slate-400">{parallelMode ? '更快速' : '更多样'}</span>
-                        </div>
-                        <button onClick={() => setParallelMode(!parallelMode)} className={`relative rounded-full transition-colors duration-300 ${parallelMode ? 'bg-sky-500' : 'bg-slate-300'}`} style={{ width: '40px', height: '22px' }}>
-                          <span className={`absolute top-0.5 left-0.5 w-[18px] h-[18px] bg-white rounded-full shadow transition-transform duration-300 ${parallelMode ? 'translate-x-[18px]' : 'translate-x-0'}`} />
-                        </button>
-                      </div>
-                    )}
                   </div>
 
                   <div className="space-y-3">
@@ -519,7 +504,6 @@ const App: React.FC = () => {
                       />
                     </div>
                     <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-slate-400">
-                      <span>{parallelMode ? '当前模式：并行生成' : '当前模式：串行生成'}</span>
                       <span>{progress.total - progress.completed > 0 ? `剩余 ${progress.total - progress.completed} 道` : '正在收尾...'}</span>
                     </div>
                   </div>
