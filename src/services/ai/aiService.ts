@@ -318,7 +318,7 @@ export class UnifiedAIService {
 
     const messages = [
       { role: "system" as const, content: systemPrompt },
-      { role: "user" as const, content: buildStemUserPrompt(config, entropy, []) + (existingContext ? "\n\n" + existingContext : "") },
+      { role: "user" as const, content: buildStemUserPrompt({ ...config, count: 1 }, entropy, []) + (existingContext ? "\n\n" + existingContext : "") },
     ];
 
     // 扩展 fetchModelCompletion 以支持 tools（通过请求体传入）
